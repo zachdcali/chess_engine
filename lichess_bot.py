@@ -4,6 +4,9 @@ import berserk
 import time
 import os
 import threading
+import random
+import json
+import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from agent_minimax import MinimaxAgent
 
@@ -283,6 +286,109 @@ def accept_challenge(event):
             pass
 
 
+# ============================================================================
+# HUNTER MODE - Actively seek out games with other bots
+# ============================================================================
+
+# Track currently playing games
+currently_playing = set()
+
+def is_bot_idle():
+    """Check if bot is currently idle (not in any active games)"""
+    try:
+        # Get list of ongoing games
+        ongoing = list(client.games.get_ongoing())
+        return len(ongoing) == 0
+    except:
+        return False
+
+def find_and_challenge_bot():
+    """
+    Find an online bot and challenge them to a game.
+
+    IMPORTANT: Only challenges other BOTS, never humans (Lichess TOS requirement)
+    """
+    try:
+        # Get list of online bots
+        # Note: This uses the public API to find bots
+        online_bots = list(client.users.get_live_streamers())
+
+        # Filter for actual bots (have BOT title) and exclude ourselves
+        account = client.account.get()
+        our_username = account['username'].lower()
+
+        # Get a list of top bots to challenge
+        # We'll use the bot.get_online_bots() if available, otherwise fall back to searching
+        try:
+            # Get online bots from Lichess bot endpoint
+            response = requests.get("https://lichess.org/api/bot/online", timeout=10)
+            if response.status_code == 200:
+                online_bots_list = []
+                for line in response.text.strip().split('\n'):
+                    if line:
+                        bot_data = json.loads(line)
+                        if bot_data.get('username', '').lower() != our_username:
+                            online_bots_list.append(bot_data)
+
+                if not online_bots_list:
+                    print("💤 No online bots found to challenge")
+                    return
+
+                # Pick a random bot from the list
+                target_bot = random.choice(online_bots_list)
+                target_username = target_bot['username']
+
+                print(f"\n🎯 Challenging bot: {target_username}")
+
+                # Send challenge (3+2 Blitz, Rated)
+                challenge_response = client.challenges.create(
+                    target_username,
+                    rated=True,  # Rated games to build rating
+                    clock_limit=180,  # 3 minutes
+                    clock_increment=2,  # 2 second increment
+                    color='random',
+                    variant='standard'
+                )
+
+                print(f"✓ Challenge sent to {target_username}!")
+
+        except Exception as e:
+            print(f"⚠️  Could not challenge bot: {e}")
+
+    except Exception as e:
+        print(f"⚠️  Error in hunter mode: {e}")
+
+def hunter_loop():
+    """
+    Background thread that periodically challenges other bots when idle.
+
+    Runs every 2 minutes to check if bot is idle and seeks new games.
+    """
+    print("🏹 Hunter mode activated - will seek games when idle")
+
+    while True:
+        try:
+            # Wait 2 minutes between checks
+            time.sleep(120)
+
+            # Check if we're idle
+            if is_bot_idle():
+                print("\n💤 Bot is idle, looking for opponents...")
+                find_and_challenge_bot()
+            else:
+                print("⚔️  Bot is currently playing")
+
+        except Exception as e:
+            print(f"⚠️  Hunter loop error: {e}")
+            time.sleep(120)  # Wait before retrying
+
+def start_hunter_mode():
+    """Start the hunter mode in a background thread"""
+    hunter_thread = threading.Thread(target=hunter_loop, daemon=True)
+    hunter_thread.start()
+    print("✓ Hunter mode started - bot will actively seek games\n")
+
+
 def main():
     """
     Main bot loop: listen for events and handle challenges/games.
@@ -307,6 +413,9 @@ def main():
     print(f"📡 Listening for challenges and games...")
     print(f"💡 Go to https://lichess.org/@/{username} to see your profile")
     print(f"{'='*60}\n")
+
+    # Start hunter mode - actively seek games with other bots
+    start_hunter_mode()
 
     # Stream incoming events (challenges and games)
     for event in client.bots.stream_incoming_events():
