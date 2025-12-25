@@ -419,18 +419,18 @@ class MinimaxAgent:
 
     def select_move(self, board, time_limit=45.0, target_depth=None, endgame_time_limit=5.0):
         """
-        Hybrid search policy:
-        - Middlegame (phase > 12): fixed depth 5, fast and consistent moves
-        - Endgame (phase <= 12): time-limited iterative deepening
-          * Minimum depth 5 guaranteed (will exceed time limit if needed)
-          * Can search deeper (depth 6+) if time permits within endgame_time_limit
-          * Only uses completed depths (partial searches are discarded)
+        Time-limited iterative deepening search for ALL game phases.
+
+        - Uses time limit passed from Lichess clock management
+        - Minimum depth 5 guaranteed (will exceed time limit if needed)
+        - Can search deeper if time permits
+        - Only uses completed depths (partial searches are discarded)
 
         Args:
             board: Current position
-            time_limit: Time limit for general use (not used in hybrid mode)
+            time_limit: Time limit for general use (not used, kept for compatibility)
             target_depth: Optional depth target (legacy parameter)
-            endgame_time_limit: Time limit for endgame positions (default: 5 seconds)
+            endgame_time_limit: Time limit for this move (from Lichess clock)
         """
 
         # NOTE: TT is preserved across moves for better performance
@@ -444,28 +444,18 @@ class MinimaxAgent:
         best_value = None
 
         # --- TUNABLES ---
-        MIDGAME_FIXED_DEPTH = 5
-        ENDGAME_PHASE_THRESHOLD = 12  # phase <= this => endgame time mode (matches MG/EG display)
-        ENDGAME_MIN_DEPTH = 5         # minimum depth to complete in endgame
-        ENDGAME_MAX_DEPTH = 99        # practical cap for iterative deepening in endgames
+        MIN_DEPTH = 5          # Always guarantee at least depth 5
+        MAX_DEPTH = 99         # Practical cap for iterative deepening
 
         try:
-            # Decide mode based on phase (0=endgame, 24=opening)
-            # This matches the display logic: phase > 12 shows "MG", phase <= 12 shows "EG"
+            # Calculate game phase for display
             phase = self.calculate_game_phase(board)
 
-            if phase > ENDGAME_PHASE_THRESHOLD:
-                # MIDGAME/OPENING: fixed depth, no time checks
-                mode = "fixed"
-                max_depth = MIDGAME_FIXED_DEPTH
-                hard_time_limit = None
-                min_depth = None
-            else:
-                # ENDGAME: time-limited iterative deepening (allows deeper search)
-                mode = "timed"
-                max_depth = ENDGAME_MAX_DEPTH
-                hard_time_limit = endgame_time_limit  # Use dedicated endgame time limit
-                min_depth = ENDGAME_MIN_DEPTH  # Must complete at least depth 5
+            # ALWAYS use time-limited iterative deepening (prevents timeouts on slow servers)
+            mode = "timed"
+            max_depth = MAX_DEPTH
+            hard_time_limit = endgame_time_limit  # This is actually the calculated time limit from Lichess clock
+            min_depth = MIN_DEPTH  # Guarantee minimum depth 5
 
             # Iterative deepening loop
             for current_depth in range(1, max_depth + 1):
@@ -609,13 +599,6 @@ class MinimaxAgent:
                 nps = int(total_nodes / depth_time) if depth_time > 0 else 0
                 tt_hit_rate = (self.tt_hits / (self.tt_hits + self.tt_misses) * 100) if (self.tt_hits + self.tt_misses) > 0 else 0
 
-                # In FIXED mode we *expect* completion; if it doesn't complete, something exploded (usually QS).
-                if mode == "fixed" and not completed:
-                    print(f"  ❌ FIXED DEPTH DID NOT COMPLETE ({moves_searched}/{total_moves}).")
-                    print(f"  💾 Falling back to last completed: {best_move} | Score: {best_value if best_value is not None else 0:+d}")
-                    print(f"  ⏱ Time: {depth_time:.2f}s | Nodes: {total_nodes:,} | Speed: {nps:,} nps")
-                    break
-
                 # Update best only if completed
                 if depth_best_move and completed:
                     best_move = depth_best_move
@@ -638,18 +621,13 @@ class MinimaxAgent:
                     print(f"  💾 Using depth {current_depth-1} result: {best_move} | Score: {best_value if best_value is not None else 0:+d}")
                     print(f"  ⏱ Time: {depth_time:.2f}s | Nodes: {total_nodes:,}")
 
-                # Stop conditions
-                if mode == "fixed":
-                    if current_depth >= MIDGAME_FIXED_DEPTH:
-                        print(f"\n🎯 Fixed depth {MIDGAME_FIXED_DEPTH} reached. Stopping search.")
+                # Stop conditions (always in timed mode now)
+                # Continue searching until time runs out or we hit target depth
+                if completed and current_depth >= min_depth:
+                    # Optional: continue to target depth if specified
+                    if target_depth and current_depth >= target_depth:
+                        print(f"\n🎯 Target depth {target_depth} reached (minimum {min_depth} satisfied). Stopping search.")
                         break
-                else:
-                    # timed mode: check if we've met minimum depth requirement
-                    if completed and current_depth >= ENDGAME_MIN_DEPTH:
-                        # Optional: continue to target depth if specified
-                        if target_depth and current_depth >= target_depth:
-                            print(f"\n🎯 Target depth {target_depth} reached (minimum {ENDGAME_MIN_DEPTH} satisfied). Stopping search.")
-                            break
 
             # Optional debug info about chosen move (same style as your original)
             if best_move:

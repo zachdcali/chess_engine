@@ -219,9 +219,14 @@ def handle_game_state(game_id, state, full_event=None):
             del active_games[game_id]
         return
 
-    # Check if it's our turn
+    # CRITICAL: Verify it's actually our turn before making a move
     if board.turn != our_color:
-        print("⏳ Waiting for opponent's move...")
+        print(f"⏳ Waiting for opponent's move... (Turn: {'White' if board.turn == chess.WHITE else 'Black'}, We are: {'White' if our_color == chess.WHITE else 'Black'})")
+        return
+
+    # Double-check we're not moving on a completed game
+    if state['status'] != 'started':
+        print(f"⚠️  Game already ended with status: {state['status']}")
         return
 
     # It's our turn! Calculate time limit
@@ -232,24 +237,34 @@ def handle_game_state(game_id, state, full_event=None):
 
     time_limit = calculate_time_limit(wtime, btime, winc, binc, board)
 
+    # Convert time values to seconds for display (use same helper as calculate_time_limit)
+    def to_seconds(time_value):
+        if time_value is None:
+            return 0.0
+        if hasattr(time_value, 'total_seconds'):
+            return time_value.total_seconds()
+        else:
+            return float(time_value) / 1000.0
+
+    wtime_sec = to_seconds(wtime)
+    btime_sec = to_seconds(btime)
+
     print(f"\n{'─'*60}")
     print(f"🧠 Bot's turn ({'White' if our_color == chess.WHITE else 'Black'})")
-    print(f"⏱️  Time remaining: {wtime/1000:.1f}s (W) | {btime/1000:.1f}s (B)")
+    print(f"⏱️  Time remaining: {wtime_sec:.1f}s (W) | {btime_sec:.1f}s (B)")
     print(f"⏱️  Time limit for this move: {time_limit:.2f}s")
     print(f"📊 Position: {len(board.move_stack)} moves played")
+    print(f"📊 Board FEN: {board.fen()}")
+    print(f"📊 Turn to move: {'White' if board.turn == chess.WHITE else 'Black'}")
+    print(f"📊 Bot color: {'White' if our_color == chess.WHITE else 'Black'}")
     print(f"{'─'*60}")
 
     # Calculate the move using our engine
     start_time = time.time()
 
-    # Determine if we should use endgame time limit
-    phase = engine.calculate_game_phase(board)
-    if phase <= 12:  # Endgame
-        # Use the calculated time limit for endgames
-        move, score = engine.select_move(board, endgame_time_limit=time_limit)
-    else:  # Middlegame/Opening
-        # Fixed depth 5 in middlegame (fast)
-        move, score = engine.select_move(board, endgame_time_limit=time_limit)
+    # Use time-limited iterative deepening for ALL phases (middlegame and endgame)
+    # This prevents timeouts on Koyeb's slower CPUs and allows deeper search when time permits
+    move, score = engine.select_move(board, endgame_time_limit=time_limit)
 
     elapsed = time.time() - start_time
 
