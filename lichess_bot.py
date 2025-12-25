@@ -290,7 +290,7 @@ def main():
     # Upgrade account to BOT status (only needs to be done once, but safe to call multiple times)
     try:
         print("🔧 Upgrading account to BOT status...")
-        client.bots.upgrade_to_bot_account()
+        client.account.upgrade_to_bot()
         print("✓ Account is now a BOT!\n")
     except berserk.exceptions.ResponseError as e:
         if "already" in str(e).lower():
