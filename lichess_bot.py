@@ -259,6 +259,9 @@ def accept_challenge(event):
     """
     Automatically accept incoming challenges.
 
+    Accepts all standard chess games (Rapid, Blitz, Classical, etc.)
+    Optimized for Rapid time controls (10+5) but will play any time control.
+
     Args:
         event: The challenge event dict
     """
@@ -267,11 +270,16 @@ def accept_challenge(event):
     variant = event['challenge']['variant']['name']
     time_control = event['challenge'].get('timeControl', {})
 
+    # Parse time control for display
+    limit = time_control.get('limit', 0) // 60 if time_control else 0  # Convert seconds to minutes
+    increment = time_control.get('increment', 0) if time_control else 0
+
     print(f"\n📨 Challenge received from {challenger}")
     print(f"   Variant: {variant}")
-    print(f"   Time control: {time_control}")
+    print(f"   Time: {limit}+{increment}" if time_control else "   Time: Unlimited")
 
-    # Accept standard chess challenges only
+    # Accept standard chess challenges only (all time controls)
+    # Note: Engine is optimized for Rapid (10+5) but will play Blitz/Classical
     if variant == 'standard':
         try:
             client.bots.accept_challenge(challenge_id)
@@ -340,17 +348,18 @@ def find_and_challenge_bot():
 
                 print(f"\n🎯 Challenging bot: {target_username}")
 
-                # Send challenge (3+2 Blitz, Rated)
+                # Send challenge (10+5 Rapid, Rated)
+                # Rapid time control gives enough time for depth-5 engine (5-15 sec/move)
                 challenge_response = client.challenges.create(
                     target_username,
                     rated=True,  # Rated games to build rating
-                    clock_limit=180,  # 3 minutes
-                    clock_increment=2,  # 2 second increment
+                    clock_limit=600,  # 10 minutes
+                    clock_increment=5,  # 5 second increment
                     color='random',
                     variant='standard'
                 )
 
-                print(f"✓ Challenge sent to {target_username}!")
+                print(f"✓ Challenge sent to {target_username} (10+5 Rapid)!")
 
         except Exception as e:
             print(f"⚠️  Could not challenge bot: {e}")
