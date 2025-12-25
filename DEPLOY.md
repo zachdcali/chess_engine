@@ -26,12 +26,23 @@ git push -u origin main
 1. Go to [koyeb.com](https://www.koyeb.com) and sign up (free)
 2. Click **"Create App"**
 3. Choose **"GitHub"** as the source
-4. Connect your GitHub account and select your `pestopasta-bot` repository
+4. Connect your GitHub account and select your `chess_engine` repository
 5. Choose **"Dockerfile"** as the build method
-6. Under **"Environment Variables"**, add:
-   - Key: `LICHESS_TOKEN`
-   - Value: `your_lichess_token_here`
+6. **IMPORTANT**: Configure these settings:
+
+   **Environment Variables** (click "Environment variables and files" or press ⌘+4):
+   - Name: `LICHESS_TOKEN`
+   - Value: `your_lichess_token_here` (e.g., `lip_...`)
+
+   **Ports** (should auto-detect):
+   - Verify port `8000` is exposed (health check endpoint)
+
+   **Health Checks**:
+   - Should show "TCP health check configured on port 8000"
+
 7. Click **"Deploy"**
+8. Wait 2-3 minutes for build
+9. Status should turn **Healthy** (green) when ready
 
 ### Step 3: Verify
 

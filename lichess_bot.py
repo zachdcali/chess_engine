@@ -3,10 +3,47 @@ import chess.pgn
 import berserk
 import time
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from agent_minimax import MinimaxAgent
 
 # ============================================================================
 # LICHESS BOT - PestoPasta-Bot
+# ============================================================================
+
+# ============================================================================
+# HEALTH CHECK SERVER (Required for Koyeb free tier)
+# ============================================================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """HTTP server for cloud platform health checks"""
+
+    def do_GET(self):
+        """Respond to health check pings"""
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"PestoPasta-Bot is online and ready to play!")
+
+    def log_message(self, format, *args):
+        """Suppress HTTP server logs to keep console clean"""
+        pass
+
+def start_health_server():
+    """Start health check server on port 8000 (Koyeb requirement)"""
+    try:
+        port = int(os.environ.get("PORT", 8000))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        print(f"🏥 Health check server running on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️  Health server error: {e}")
+
+# Start health check server in background thread (daemon=True means it dies when main program exits)
+health_thread = threading.Thread(target=start_health_server, daemon=True)
+health_thread.start()
+
+# ============================================================================
+# LICHESS API SETUP
 # ============================================================================
 
 # Get Lichess API Token from environment variable (for security)
