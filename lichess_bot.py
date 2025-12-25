@@ -76,22 +76,40 @@ def calculate_time_limit(wtime, btime, winc, binc, board):
     Calculate the time limit for this move based on time control.
 
     Args:
-        wtime: White's remaining time in milliseconds
-        btime: Black's remaining time in milliseconds
-        winc: White's increment in milliseconds
-        binc: Black's increment in milliseconds
+        wtime: White's remaining time (milliseconds or timedelta)
+        btime: Black's remaining time (milliseconds or timedelta)
+        winc: White's increment (milliseconds or timedelta)
+        binc: Black's increment (milliseconds or timedelta)
         board: Current board position
 
     Returns:
         float: Time limit in seconds for this move
     """
+    # Convert all time values to seconds (handle both int/milliseconds and timedelta objects)
+    def to_seconds(time_value):
+        """Convert time value to seconds, handling both int and timedelta"""
+        if time_value is None:
+            return 0.0
+        if hasattr(time_value, 'total_seconds'):
+            # It's a timedelta object
+            return time_value.total_seconds()
+        else:
+            # Assume it's milliseconds (int or float)
+            return float(time_value) / 1000.0
+
+    # Convert all inputs to seconds
+    wtime_sec = to_seconds(wtime)
+    btime_sec = to_seconds(btime)
+    winc_sec = to_seconds(winc)
+    binc_sec = to_seconds(binc)
+
     # Determine which color we are and get our time/increment
     if board.turn == chess.WHITE:
-        our_time = wtime / 1000.0  # Convert to seconds
-        our_inc = winc / 1000.0
+        our_time = wtime_sec
+        our_inc = winc_sec
     else:
-        our_time = btime / 1000.0
-        our_inc = binc / 1000.0
+        our_time = btime_sec
+        our_inc = binc_sec
 
     # Time management formula: divide remaining time over expected moves + use most of increment
     # Assume ~40 moves remaining in the game
