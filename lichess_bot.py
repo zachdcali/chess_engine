@@ -295,9 +295,13 @@ def accept_challenge(event):
     Accepts all standard chess games (Rapid, Blitz, Classical, etc.)
     Optimized for Rapid time controls (10+5) but will play any time control.
 
+    CONCURRENCY: Only accepts challenges when idle (max 1 game at a time)
+
     Args:
         event: The challenge event dict
     """
+    global active_games
+
     challenge_id = event['challenge']['id']
     challenger = event['challenge']['challenger']['name']
     variant = event['challenge']['variant']['name']
@@ -310,6 +314,17 @@ def accept_challenge(event):
     print(f"\n📨 Challenge received from {challenger}")
     print(f"   Variant: {variant}")
     print(f"   Time: {limit}+{increment}" if time_control else "   Time: Unlimited")
+
+    # CRITICAL: Only accept if we're idle (no active games)
+    # Python is single-threaded - minimax search blocks everything
+    if len(active_games) > 0:
+        print(f"⚠️  Declined: Already playing {len(active_games)} game(s)")
+        print(f"   Active games: {list(active_games.keys())}")
+        try:
+            client.bots.decline_challenge(challenge_id, reason=berserk.enums.DeclineReason.LATER)
+        except:
+            pass
+        return
 
     # Accept standard chess challenges only (all time controls)
     # Note: Engine is optimized for Rapid (10+5) but will play Blitz/Classical
@@ -330,25 +345,44 @@ def accept_challenge(event):
 # ============================================================================
 # HUNTER MODE - Actively seek out games with other bots
 # ============================================================================
+# CONCURRENCY LIMIT: 1 game at a time
+# Python is single-threaded - minimax search blocks all other operations
+# Playing multiple games simultaneously would cause 30-second abort timeouts
+# ============================================================================
 
-# Track currently playing games
+# Track currently playing games (game_id -> color)
+# This is used to enforce max_concurrency = 1
 currently_playing = set()
 
 def is_bot_idle():
     """Check if bot is currently idle (not in any active games)"""
+    global active_games
     try:
-        # Get list of ongoing games
+        # Check our internal tracking first (more reliable)
+        if len(active_games) > 0:
+            return False
+
+        # Double-check with Lichess API
         ongoing = list(client.games.get_ongoing())
         return len(ongoing) == 0
     except:
-        return False
+        # If API call fails, be conservative and assume we're busy
+        return len(active_games) == 0
 
 def find_and_challenge_bot():
     """
     Find an online bot and challenge them to a game.
 
     IMPORTANT: Only challenges other BOTS, never humans (Lichess TOS requirement)
+    CONCURRENCY: Only sends challenge if bot is idle (no active games)
     """
+    global active_games
+
+    # Safety check: Don't send challenges if already in a game
+    if len(active_games) > 0:
+        print(f"⚠️  Skipping challenge: Already in {len(active_games)} game(s)")
+        return
+
     try:
         # Get list of online bots
         # Note: This uses the public API to find bots
@@ -405,8 +439,9 @@ def hunter_loop():
     Background thread that periodically challenges other bots when idle.
 
     Runs every 2 minutes to check if bot is idle and seeks new games.
+    MAX CONCURRENCY: 1 game at a time (Python single-threaded constraint)
     """
-    print("🏹 Hunter mode activated - will seek games when idle")
+    print("🏹 Hunter mode activated - will seek games when idle (max 1 at a time)")
 
     while True:
         try:
@@ -418,7 +453,10 @@ def hunter_loop():
                 print("\n💤 Bot is idle, looking for opponents...")
                 find_and_challenge_bot()
             else:
-                print("⚔️  Bot is currently playing")
+                global active_games
+                print(f"⚔️  Bot is currently playing ({len(active_games)} active game(s))")
+                if active_games:
+                    print(f"   Active: {list(active_games.keys())}")
 
         except Exception as e:
             print(f"⚠️  Hunter loop error: {e}")
@@ -453,6 +491,7 @@ def main():
     print(f"🤖 PestoPasta-Bot ({username}) is now online!")
     print(f"{'='*60}")
     print(f"📡 Listening for challenges and games...")
+    print(f"🎯 Max concurrency: 1 game at a time (single-threaded)")
     print(f"💡 Go to https://lichess.org/@/{username} to see your profile")
     print(f"{'='*60}\n")
 
