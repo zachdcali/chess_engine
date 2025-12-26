@@ -63,13 +63,18 @@ if not LICHESS_TOKEN or LICHESS_TOKEN == "":
 session = berserk.TokenSession(LICHESS_TOKEN)
 client = berserk.Client(session)
 
+# Cache bot identity at startup to avoid repeated API calls during games
+BOT_ACCOUNT = client.account.get()
+BOT_ID = BOT_ACCOUNT['id']  # Lowercase ID is more reliable than 'username'
+print(f"🤖 Bot initialized as: {BOT_ACCOUNT['username']} ({BOT_ID})")
+
 # Initialize the chess engine (depth 5 for standard search)
-print("🤖 Initializing PestoPasta-Bot engine...")
 engine = MinimaxAgent(depth=5)
 print("✓ Engine ready!\n")
 
 # Store game-specific information (game_id -> color mapping)
 active_games = {}
+is_playing = False  # Global lock for max 1 game at a time
 
 def calculate_time_limit(wtime, btime, winc, binc, board):
     """
@@ -139,6 +144,9 @@ def play_game(game_id):
     Args:
         game_id: The Lichess game ID
     """
+    global is_playing
+
+    is_playing = True  # Lock to prevent accepting other challenges
     print(f"\n{'='*60}")
     print(f"🎮 Starting game: {game_id}")
     print(f"{'='*60}\n")
@@ -147,18 +155,34 @@ def play_game(game_id):
     print("🧹 Clearing transposition table for new game...")
     engine.clear_tt()
 
-    # Stream the game state
-    for event in client.bots.stream_game_state(game_id):
-        # Handle different event types
-        if event['type'] == 'gameFull':
-            # Initial game state
-            handle_game_state(game_id, event['state'], event)
-        elif event['type'] == 'gameState':
-            # Game state update (new move)
-            handle_game_state(game_id, event)
-        elif event['type'] == 'chatLine':
-            # Chat message (ignore for now)
-            pass
+    try:
+        # Stream the game state
+        for event in client.bots.stream_game_state(game_id):
+            # Handle different event types
+            if event['type'] == 'gameFull':
+                # Initial game state
+                handle_game_state(game_id, event['state'], event)
+            elif event['type'] == 'gameState':
+                # Game state update (new move)
+                handle_game_state(game_id, event)
+            elif event['type'] == 'chatLine':
+                # Chat message (ignore for now)
+                pass
+
+            # Check if game ended
+            status = event.get('status') or event.get('state', {}).get('status')
+            if status and status != 'started':
+                break
+    except Exception as e:
+        print(f"❌ Stream Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Always release the lock when game ends
+        is_playing = False
+        if game_id in active_games:
+            del active_games[game_id]
+        print(f"\n🏁 Game Finished: {game_id}")
 
 
 def handle_game_state(game_id, state, full_event=None):
@@ -172,31 +196,19 @@ def handle_game_state(game_id, state, full_event=None):
     """
     global active_games
 
-    # Get the moves string and convert to a board position
-    moves_str = state.get('moves', '')
-    board = chess.Board()
-
-    if moves_str:
-        # Apply all moves to the board
-        for move_uci in moves_str.split():
-            board.push_uci(move_uci)
-
     # Determine our color (from full_event on first call, then from stored info)
     if full_event:
-        # First time seeing this game - determine and store our color
-        account_info = client.account.get()
-        bot_username = account_info['username'].lower()
+        # First time seeing this game - determine and store our color using ID (more reliable)
+        white_id = full_event.get('white', {}).get('id', '').lower()
+        black_id = full_event.get('black', {}).get('id', '').lower()
 
         white_player = full_event.get('white', {}).get('name', 'Unknown')
         black_player = full_event.get('black', {}).get('name', 'Unknown')
         print(f"⚔️  White: {white_player} vs Black: {black_player}")
 
-        white_name = white_player.lower()
-        black_name = black_player.lower()
-
-        if bot_username == white_name:
+        if BOT_ID == white_id:
             our_color = chess.WHITE
-        elif bot_username == black_name:
+        elif BOT_ID == black_id:
             our_color = chess.BLACK
         else:
             print("⚠️  Could not determine bot color!")
@@ -204,16 +216,29 @@ def handle_game_state(game_id, state, full_event=None):
 
         # Store for future state updates
         active_games[game_id] = our_color
+
+        # For gameFull events, the actual state is nested
+        actual_state = full_event.get('state', state)
     else:
         # Retrieve our color from stored info
         our_color = active_games.get(game_id)
         if our_color is None:
             print("⚠️  Game color not found in active games!")
             return
+        actual_state = state
+
+    # Get the moves string and convert to a board position
+    moves_str = actual_state.get('moves', '')
+    board = chess.Board()
+
+    if moves_str:
+        # Apply all moves to the board
+        for move_uci in moves_str.split():
+            board.push_uci(move_uci)
 
     # Check if game is over
-    if state['status'] != 'started':
-        print(f"\n🏁 Game Over! Status: {state['status']}")
+    if actual_state['status'] != 'started':
+        print(f"\n🏁 Game Over! Status: {actual_state['status']}")
         # Clean up
         if game_id in active_games:
             del active_games[game_id]
@@ -225,15 +250,15 @@ def handle_game_state(game_id, state, full_event=None):
         return
 
     # Double-check we're not moving on a completed game
-    if state['status'] != 'started':
-        print(f"⚠️  Game already ended with status: {state['status']}")
+    if actual_state['status'] != 'started':
+        print(f"⚠️  Game already ended with status: {actual_state['status']}")
         return
 
     # It's our turn! Calculate time limit
-    wtime = state.get('wtime', 60000)
-    btime = state.get('btime', 60000)
-    winc = state.get('winc', 0)
-    binc = state.get('binc', 0)
+    wtime = actual_state.get('wtime', 60000)
+    btime = actual_state.get('btime', 60000)
+    winc = actual_state.get('winc', 0)
+    binc = actual_state.get('binc', 0)
 
     time_limit = calculate_time_limit(wtime, btime, winc, binc, board)
 
@@ -300,7 +325,7 @@ def accept_challenge(event):
     Args:
         event: The challenge event dict
     """
-    global active_games
+    global is_playing
 
     challenge_id = event['challenge']['id']
     challenger = event['challenge']['challenger']['name']
@@ -317,9 +342,8 @@ def accept_challenge(event):
 
     # CRITICAL: Only accept if we're idle (no active games)
     # Python is single-threaded - minimax search blocks everything
-    if len(active_games) > 0:
-        print(f"⚠️  Declined: Already playing {len(active_games)} game(s)")
-        print(f"   Active games: {list(active_games.keys())}")
+    if is_playing:
+        print(f"⚠️  Declined: Already playing a game")
         try:
             client.bots.decline_challenge(challenge_id, reason=berserk.enums.DeclineReason.LATER)
         except:
@@ -350,16 +374,12 @@ def accept_challenge(event):
 # Playing multiple games simultaneously would cause 30-second abort timeouts
 # ============================================================================
 
-# Track currently playing games (game_id -> color)
-# This is used to enforce max_concurrency = 1
-currently_playing = set()
-
 def is_bot_idle():
     """Check if bot is currently idle (not in any active games)"""
-    global active_games
+    global is_playing
     try:
         # Check our internal tracking first (more reliable)
-        if len(active_games) > 0:
+        if is_playing:
             return False
 
         # Double-check with Lichess API
@@ -367,7 +387,7 @@ def is_bot_idle():
         return len(ongoing) == 0
     except:
         # If API call fails, be conservative and assume we're busy
-        return len(active_games) == 0
+        return not is_playing
 
 def find_and_challenge_bot():
     """
@@ -376,33 +396,25 @@ def find_and_challenge_bot():
     IMPORTANT: Only challenges other BOTS, never humans (Lichess TOS requirement)
     CONCURRENCY: Only sends challenge if bot is idle (no active games)
     """
-    global active_games
+    global is_playing
 
     # Safety check: Don't send challenges if already in a game
-    if len(active_games) > 0:
-        print(f"⚠️  Skipping challenge: Already in {len(active_games)} game(s)")
+    if is_playing:
+        print(f"⚠️  Skipping challenge: Already in a game")
         return
 
     try:
-        # Get list of online bots
-        # Note: This uses the public API to find bots
-        online_bots = list(client.users.get_live_streamers())
-
-        # Filter for actual bots (have BOT title) and exclude ourselves
-        account = client.account.get()
-        our_username = account['username'].lower()
-
-        # Get a list of top bots to challenge
-        # We'll use the bot.get_online_bots() if available, otherwise fall back to searching
+        # Get online bots from Lichess bot endpoint
+        # We use BOT_ID (cached at startup) to exclude ourselves
         try:
-            # Get online bots from Lichess bot endpoint
             response = requests.get("https://lichess.org/api/bot/online", timeout=10)
             if response.status_code == 200:
                 online_bots_list = []
                 for line in response.text.strip().split('\n'):
                     if line:
                         bot_data = json.loads(line)
-                        if bot_data.get('username', '').lower() != our_username:
+                        # Exclude ourselves using cached BOT_ID
+                        if bot_data.get('id', '').lower() != BOT_ID:
                             online_bots_list.append(bot_data)
 
                 if not online_bots_list:
@@ -417,7 +429,7 @@ def find_and_challenge_bot():
 
                 # Send challenge (30+20 Classical, Rated)
                 # Classical time control gives plenty of time for depth-5 engine
-                challenge_response = client.challenges.create(
+                client.challenges.create(
                     target_username,
                     rated=True,  # Rated games to build rating
                     clock_limit=1800,  # 30 minutes
@@ -453,10 +465,7 @@ def hunter_loop():
                 print("\n💤 Bot is idle, looking for opponents...")
                 find_and_challenge_bot()
             else:
-                global active_games
-                print(f"⚔️  Bot is currently playing ({len(active_games)} active game(s))")
-                if active_games:
-                    print(f"   Active: {list(active_games.keys())}")
+                print(f"⚔️  Bot is currently playing a game")
 
         except Exception as e:
             print(f"⚠️  Hunter loop error: {e}")
@@ -484,9 +493,8 @@ def main():
         else:
             print(f"⚠️  Error upgrading to BOT: {e}\n")
 
-    # Get account info
-    account = client.account.get()
-    username = account['username']
+    # Use cached account info (already fetched at startup)
+    username = BOT_ACCOUNT['username']
     print(f"{'='*60}")
     print(f"🤖 PestoPasta-Bot ({username}) is now online!")
     print(f"{'='*60}")
