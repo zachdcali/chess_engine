@@ -496,7 +496,7 @@ public:
             tt_misses++;
         }
 
-        // NULL MOVE PRUNING: Try passing the turn and see if we still fail high
+        // NULL MOVE PRUNING: Try passing the turn and see if we still fail high/low
         // This is safe when: deep enough, not in check, not at root, have material
         if (depth >= 3 && !b.inCheck() && ply_from_root > 0) {
             // Only do NMP if we have non-pawn material (avoid zugzwang)
@@ -518,12 +518,21 @@ public:
             if (has_material) {
                 const int R = 2;  // Reduction factor (depth reduction)
                 b.makeNullMove();
-                int null_score = -minimax(b, depth - 1 - R, -beta, -beta + 1, ply_from_root + 1);
+                // Use normal minimax call (handles side switching correctly)
+                int null_score = minimax(b, depth - 1 - R, alpha, beta, ply_from_root + 1);
                 b.unmakeNullMove();
 
-                if (null_score >= beta) {
-                    // Null move caused beta cutoff - position is too good
-                    return beta;
+                // Check for cutoff based on which side was originally to move
+                if (our_color == Color::WHITE) {
+                    // WHITE maximizes: if even after passing, score >= beta, position too good
+                    if (null_score >= beta) {
+                        return beta;
+                    }
+                } else {
+                    // BLACK minimizes: if even after passing, score <= alpha, position too good for BLACK
+                    if (null_score <= alpha) {
+                        return alpha;
+                    }
                 }
             }
         }
