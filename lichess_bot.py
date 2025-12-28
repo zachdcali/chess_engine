@@ -318,7 +318,7 @@ def accept_challenge(event):
     Automatically accept incoming challenges.
 
     Accepts all standard chess games (Rapid, Blitz, Classical, etc.)
-    Optimized for Classical time controls (30+20) but will play any time control.
+    Optimized for Rapid time controls (10+5) but will play any time control.
 
     CONCURRENCY: Only accepts challenges when idle (max 1 game at a time)
 
@@ -427,18 +427,18 @@ def find_and_challenge_bot():
 
                 print(f"\n🎯 Challenging bot: {target_username}")
 
-                # Send challenge (30+20 Classical, Rated)
-                # Classical time control gives plenty of time for depth-5 engine
+                # Send challenge (10+5 Rapid, Rated)
+                # Rapid time control - C++ engine at depth 8 is fast enough
                 client.challenges.create(
                     target_username,
                     rated=True,  # Rated games to build rating
-                    clock_limit=1800,  # 30 minutes
-                    clock_increment=20,  # 20 second increment
+                    clock_limit=600,  # 10 minutes
+                    clock_increment=5,  # 5 second increment
                     color='random',
                     variant='standard'
                 )
 
-                print(f"✓ Challenge sent to {target_username} (30+20 Classical)!")
+                print(f"✓ Challenge sent to {target_username} (10+5 Rapid)!")
 
         except Exception as e:
             print(f"⚠️  Could not challenge bot: {e}")

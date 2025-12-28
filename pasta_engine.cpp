@@ -159,8 +159,51 @@ const int KING_EG[64] = {
     -74, -35, -18, -18, -11,  15,   4, -17,
 };
 
-const int* PST_MG[] = {PAWN_MG, KNIGHT_MG, BISHOP_MG, ROOK_MG, QUEEN_MG, KING_MG};
-const int* PST_EG[] = {PAWN_EG, KNIGHT_EG, BISHOP_EG, ROOK_EG, QUEEN_EG, KING_EG};
+// Helper to flip PST ranks (convert rank-8-first to rank-1-first)
+inline void flip_ranks(int out[64], const int in[64]) {
+    for (int r = 0; r < 8; ++r) {
+        for (int f = 0; f < 8; ++f) {
+            out[r * 8 + f] = in[(7 - r) * 8 + f];
+        }
+    }
+}
+
+// Flipped PST arrays (rank-1-first for a1=0 indexing)
+int PAWN_MG_FLIP[64], PAWN_EG_FLIP[64];
+int KNIGHT_MG_FLIP[64], KNIGHT_EG_FLIP[64];
+int BISHOP_MG_FLIP[64], BISHOP_EG_FLIP[64];
+int ROOK_MG_FLIP[64], ROOK_EG_FLIP[64];
+int QUEEN_MG_FLIP[64], QUEEN_EG_FLIP[64];
+int KING_MG_FLIP[64], KING_EG_FLIP[64];
+
+// Initialize flipped arrays once at startup
+struct PSTInitializer {
+    PSTInitializer() {
+        flip_ranks(PAWN_MG_FLIP, PAWN_MG);
+        flip_ranks(PAWN_EG_FLIP, PAWN_EG);
+        flip_ranks(KNIGHT_MG_FLIP, KNIGHT_MG);
+        flip_ranks(KNIGHT_EG_FLIP, KNIGHT_EG);
+        flip_ranks(BISHOP_MG_FLIP, BISHOP_MG);
+        flip_ranks(BISHOP_EG_FLIP, BISHOP_EG);
+        flip_ranks(ROOK_MG_FLIP, ROOK_MG);
+        flip_ranks(ROOK_EG_FLIP, ROOK_EG);
+        flip_ranks(QUEEN_MG_FLIP, QUEEN_MG);
+        flip_ranks(QUEEN_EG_FLIP, QUEEN_EG);
+        flip_ranks(KING_MG_FLIP, KING_MG);
+        flip_ranks(KING_EG_FLIP, KING_EG);
+    }
+} pst_init;
+
+// Use flipped versions (correctly oriented for a1=0 indexing)
+const int* PST_MG[] = {PAWN_MG_FLIP, KNIGHT_MG_FLIP, BISHOP_MG_FLIP, ROOK_MG_FLIP, QUEEN_MG_FLIP, KING_MG_FLIP};
+const int* PST_EG[] = {PAWN_EG_FLIP, KNIGHT_EG_FLIP, BISHOP_EG_FLIP, ROOK_EG_FLIP, QUEEN_EG_FLIP, KING_EG_FLIP};
+
+// Helper to safely map PieceType to array indices (defensive against enum changes)
+inline int pt_index(PieceType pt) {
+    // For this library, PieceType values are 0-5 (Pawn=0, Knight=1, Bishop=2, Rook=3, Queen=4, King=5)
+    // We cast to int for indexing, verified to be correct for chess-library
+    return static_cast<int>(pt);
+}
 
 // ============================================================================
 // TRANSPOSITION TABLE
@@ -259,7 +302,7 @@ public:
             bb.pop();
             auto piece = b.at(sq);
             if (piece != Piece::NONE) {
-                phase += phase_values[static_cast<int>(piece.type())];
+                phase += phase_values[pt_index(piece.type())];
             }
         }
         return std::min(phase, 24);
@@ -292,14 +335,14 @@ public:
             PieceType pt = piece.type();
             Color col = piece.color();
 
-            int pt_idx = static_cast<int>(pt);
+            int pt_idx = pt_index(pt);
             int mg_material = PIECE_VALUES_MG[pt_idx];
             int eg_material = PIECE_VALUES_EG[pt_idx];
 
-            // Get PST value (mirror for black)
+            // Get PST value (rank flip for black)
             int sq_idx = sq.index();
             if (col == Color::BLACK) {
-                sq_idx ^= 56;  // Flip rank
+                sq_idx ^= 56;  // Flip ranks (a1 <-> a8, b1 <-> b8, etc.)
             }
 
             int mg_pst = PST_MG[pt_idx][sq_idx];
@@ -336,9 +379,14 @@ public:
         }
 
         // 3. Captures (MVV-LVA) - 1,000,000 to 1,010,000
+        // En passant is a special case - treat as pawn capturing pawn
+        if (m.typeOf() == Move::ENPASSANT) {
+            return 1000000 + (100 * 10) - 100;  // Pawn captures pawn
+        }
+
         if (captured != Piece::NONE) {
-            int victim_value = piece_values[static_cast<int>(captured.type())];
-            int attacker_value = piece_values[static_cast<int>(b.at(from).type())];
+            int victim_value = piece_values[pt_index(captured.type())];
+            int attacker_value = piece_values[pt_index(b.at(from).type())];
             return 1000000 + (victim_value * 10) - attacker_value;
         }
 
@@ -373,25 +421,23 @@ public:
             }
         }
 
-        // Generate tactical moves
-        // CRITICAL: Only generate captures, even when in check (prevents explosion)
-        // This keeps quiescence fast and focused on tactical sequences
+        // Generate moves based on check status
+        // CRITICAL: When in check, we MUST search all legal evasions (not just captures)
+        // This matches Python behavior and is required for correctness
         Movelist moves;
-        movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, b);
+        if (in_check) {
+            // In check: generate ALL legal evasions (king moves, blocks, captures)
+            movegen::legalmoves(moves, b);
 
-        // Special case: If in check with no captures, check if it's checkmate
-        if (moves.size() == 0 && in_check) {
-            Movelist all_moves;
-            movegen::legalmoves(all_moves, b);
-            if (all_moves.size() == 0) {
-                // Checkmate
+            // Check for checkmate
+            if (moves.size() == 0) {
                 return (b.sideToMove() == Color::WHITE) ? -100000 + ply_from_root : 100000 - ply_from_root;
             }
-            // Not checkmate, just no captures available - return stand pat
-            return stand_pat;
+        } else {
+            // Not in check: only generate captures (tactical search)
+            movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, b);
+            if (moves.size() == 0) return stand_pat;
         }
-
-        if (moves.size() == 0) return stand_pat;
 
         // Calculate game phase for delta pruning (same as Python)
         int phase = calculate_phase(b);
@@ -412,17 +458,27 @@ public:
             const int DELTA_MARGIN = 100;  // 100cp safety margin
 
             if (!in_check && phase > 4 && m.typeOf() != Move::PROMOTION) {
-                auto captured = b.at(m.to());
-                if (captured != Piece::NONE) {
-                    int victim_value = piece_values[static_cast<int>(captured.type())];
+                int victim_value = 0;
 
+                // Handle en passant specially (captured pawn is not at the "to" square)
+                if (m.typeOf() == Move::ENPASSANT) {
+                    victim_value = 100;  // Pawn
+                } else {
+                    auto captured = b.at(m.to());
+                    if (captured != Piece::NONE) {
+                        victim_value = piece_values[pt_index(captured.type())];
+                    }
+                }
+
+                if (victim_value > 0) {
                     // Prune if even capturing + margin can't improve position
                     if (b.sideToMove() == Color::WHITE) {
                         if (stand_pat + victim_value + DELTA_MARGIN < alpha) {
                             continue;  // Skip this hopeless capture
                         }
                     } else {
-                        if (stand_pat - victim_value - DELTA_MARGIN > beta) {
+                        // BLACK: optimistic bound still can't beat beta
+                        if (stand_pat - victim_value + DELTA_MARGIN > beta) {
                             continue;  // Skip this hopeless capture
                         }
                     }
@@ -447,7 +503,8 @@ public:
 
     int minimax(Board& b, int depth, int alpha, int beta, int ply_from_root) {
         // Draw by repetition or 50-move rule
-        if (b.isRepetition(1) || b.isHalfMoveDraw()) {
+        // isRepetition(2) checks for 3-fold repetition (2 previous occurrences)
+        if (b.isRepetition(2) || b.isHalfMoveDraw()) {
             return 0;
         }
 
@@ -578,6 +635,10 @@ public:
 
         // Search all moves
         for (const auto& m : moves) {
+            // Check if move is quiet BEFORE making it (for killer/history updates)
+            bool is_capture = (b.at(m.to()) != Piece::NONE) || (m.typeOf() == Move::ENPASSANT);
+            bool is_quiet = !is_capture && (m.typeOf() != Move::PROMOTION);
+
             b.makeMove(m);
             int score = minimax(b, depth - 1, alpha, beta, ply_from_root + 1);
             b.unmakeMove(m);
@@ -592,7 +653,7 @@ public:
                     alpha_cutoffs++;
 
                     // Update killers and history for quiet moves
-                    if (b.at(m.to()) == Piece::NONE && m.typeOf() != Move::PROMOTION) {
+                    if (is_quiet) {
                         int from_idx = m.from().index();
                         int to_idx = m.to().index();
                         history_table[from_idx][to_idx] += depth * depth;
@@ -614,7 +675,7 @@ public:
                     alpha_cutoffs++;
 
                     // Update killers and history for quiet moves
-                    if (b.at(m.to()) == Piece::NONE && m.typeOf() != Move::PROMOTION) {
+                    if (is_quiet) {
                         int from_idx = m.from().index();
                         int to_idx = m.to().index();
                         history_table[from_idx][to_idx] += depth * depth;
