@@ -75,6 +75,7 @@ print("✓ C++ Engine ready (depth 8)!\n")
 # Store game-specific information (game_id -> color mapping)
 active_games = {}
 is_playing = False  # Global lock for max 1 game at a time
+game_start_times = {}  # Track when games start for watchdog
 
 def calculate_time_limit(wtime, btime, winc, binc, board):
     """
@@ -144,18 +145,20 @@ def play_game(game_id):
     Args:
         game_id: The Lichess game ID
     """
-    global is_playing
-
-    is_playing = True  # Lock to prevent accepting other challenges
-    print(f"\n{'='*60}")
-    print(f"🎮 Starting game: {game_id}")
-    print(f"{'='*60}\n")
-
-    # Clear the transposition table for a new game
-    print("🧹 Clearing transposition table for new game...")
-    engine.clear_tt()
+    global is_playing, game_start_times
 
     try:
+        is_playing = True  # Lock to prevent accepting other challenges
+        game_start_times[game_id] = time.time()  # Track when game started
+
+        print(f"\n{'='*60}")
+        print(f"🎮 Starting game: {game_id}")
+        print(f"{'='*60}\n")
+
+        # Clear the transposition table for a new game
+        print("🧹 Clearing transposition table for new game...")
+        engine.clear_tt()
+
         # Stream the game state
         for event in client.bots.stream_game_state(game_id):
             # Handle different event types
@@ -169,19 +172,38 @@ def play_game(game_id):
                 # Chat message (ignore for now)
                 pass
 
+            # MOVE 1 WATCHDOG: Check if opponent hasn't moved after 5 minutes
+            # This prevents getting stuck when opponent abandons game before first move
+            if game_id in game_start_times and game_id in active_games:
+                elapsed = time.time() - game_start_times[game_id]
+                our_color = active_games[game_id]
+                moves = event.get('state', {}).get('moves', '') or event.get('moves', '')
+
+                # If we're Black and no moves after 5 minutes, abort
+                if our_color == chess.BLACK and moves == '' and elapsed > 300:  # 5 minutes
+                    print(f"⏰ WATCHDOG: Opponent hasn't moved after 5 minutes. Aborting game...")
+                    try:
+                        client.bots.abort_game(game_id)
+                    except:
+                        pass  # Game might already be over
+                    break
+
             # Check if game ended
             status = event.get('status') or event.get('state', {}).get('status')
             if status and status != 'started':
                 break
+
     except Exception as e:
         print(f"❌ Stream Error: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        # Always release the lock when game ends
+        # ALWAYS release the lock when game ends (even if crashed)
         is_playing = False
         if game_id in active_games:
             del active_games[game_id]
+        if game_id in game_start_times:
+            del game_start_times[game_id]
         print(f"\n🏁 Game Finished: {game_id}")
 
 
@@ -478,6 +500,42 @@ def start_hunter_mode():
     print("✓ Hunter mode started - bot will actively seek games\n")
 
 
+def cleanup_ongoing_games():
+    """
+    Clean up any ongoing games from previous session at startup.
+    This prevents the bot from being stuck in a zombie game.
+    """
+    global is_playing
+
+    print("🧹 Checking for ongoing games from previous session...")
+    try:
+        ongoing = client.games.get_ongoing(count=10)
+        if ongoing:
+            print(f"⚠️  Found {len(ongoing)} ongoing game(s) from previous session")
+            for game in ongoing:
+                game_id = game['gameId']
+                print(f"   🗑️  Resigning game: {game_id}")
+                try:
+                    # Try to resign (safer than abort for old games)
+                    client.bots.resign_game(game_id)
+                except Exception as e:
+                    print(f"   ⚠️  Could not resign {game_id}: {e}")
+                    try:
+                        # If resign fails, try abort
+                        client.bots.abort_game(game_id)
+                    except:
+                        pass  # Game might already be over
+            print("✓ Cleanup complete - starting fresh\n")
+        else:
+            print("✓ No ongoing games - clean state\n")
+
+        # Ensure is_playing is False after cleanup
+        is_playing = False
+    except Exception as e:
+        print(f"⚠️  Error during cleanup: {e}\n")
+        is_playing = False  # Ensure lock is released
+
+
 def main():
     """
     Main bot loop: listen for events and handle challenges/games.
@@ -503,6 +561,9 @@ def main():
     print(f"💡 Go to https://lichess.org/@/{username} to see your profile")
     print(f"{'='*60}\n")
 
+    # Clean up any zombie games from previous session
+    cleanup_ongoing_games()
+
     # Start hunter mode - actively seek games with other bots
     start_hunter_mode()
 
@@ -512,15 +573,12 @@ def main():
             # New challenge received
             accept_challenge(event)
         elif event['type'] == 'gameStart':
-            # Game is starting
+            # Game is starting - run in a separate thread so event loop continues
             game_id = event['game']['id']
             print(f"\n🎮 Game starting: {game_id}")
-            try:
-                play_game(game_id)
-            except Exception as e:
-                print(f"❌ Error during game: {e}")
-                import traceback
-                traceback.print_exc()
+            # Run game in thread so we can still receive events (abort, chat, etc.)
+            game_thread = threading.Thread(target=play_game, args=(game_id,), daemon=False)
+            game_thread.start()
         elif event['type'] == 'gameFinish':
             # Game finished
             game_id = event['game']['id']
