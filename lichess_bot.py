@@ -8,7 +8,7 @@ import random
 import json
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from agent_minimax import MinimaxAgent
+from cpp_engine_bridge import CppEngineAgent
 
 # ============================================================================
 # LICHESS BOT - PestoPasta-Bot
@@ -68,9 +68,9 @@ BOT_ACCOUNT = client.account.get()
 BOT_ID = BOT_ACCOUNT['id']  # Lowercase ID is more reliable than 'username'
 print(f"🤖 Bot initialized as: {BOT_ACCOUNT['username']} ({BOT_ID})")
 
-# Initialize the chess engine (depth 5 for standard search)
-engine = MinimaxAgent(depth=5)
-print("✓ Engine ready!\n")
+# Initialize the C++ chess engine (depth 8 - much faster than Python!)
+engine = CppEngineAgent(depth=8, engine_path="./pasta_engine")
+print("✓ C++ Engine ready (depth 8)!\n")
 
 # Store game-specific information (game_id -> color mapping)
 active_games = {}
