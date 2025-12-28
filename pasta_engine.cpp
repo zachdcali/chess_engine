@@ -26,7 +26,8 @@ using namespace chess;
 const int PIECE_VALUES_MG[] = {82, 337, 365, 477, 1025, 0};  // P N B R Q K
 const int PIECE_VALUES_EG[] = {94, 281, 297, 512, 936, 0};
 
-// PeSTO Piece-Square Tables (from White's perspective, a1=0, h8=63)
+// PeSTO Piece-Square Tables (from White's perspective, rank-1-first, a1=0, h8=63)
+// Indices 0-7 = rank 1, 8-15 = rank 2, ..., 56-63 = rank 8
 const int PAWN_MG[64] = {
     0,   0,   0,   0,   0,   0,  0,   0,
     -35,  -1, -20, -23, -15,  24, 38, -22,
@@ -159,44 +160,10 @@ const int KING_EG[64] = {
     -74, -35, -18, -18, -11,  15,   4, -17,
 };
 
-// Helper to flip PST ranks (convert rank-8-first to rank-1-first)
-inline void flip_ranks(int out[64], const int in[64]) {
-    for (int r = 0; r < 8; ++r) {
-        for (int f = 0; f < 8; ++f) {
-            out[r * 8 + f] = in[(7 - r) * 8 + f];
-        }
-    }
-}
-
-// Flipped PST arrays (rank-1-first for a1=0 indexing)
-int PAWN_MG_FLIP[64], PAWN_EG_FLIP[64];
-int KNIGHT_MG_FLIP[64], KNIGHT_EG_FLIP[64];
-int BISHOP_MG_FLIP[64], BISHOP_EG_FLIP[64];
-int ROOK_MG_FLIP[64], ROOK_EG_FLIP[64];
-int QUEEN_MG_FLIP[64], QUEEN_EG_FLIP[64];
-int KING_MG_FLIP[64], KING_EG_FLIP[64];
-
-// Initialize flipped arrays once at startup
-struct PSTInitializer {
-    PSTInitializer() {
-        flip_ranks(PAWN_MG_FLIP, PAWN_MG);
-        flip_ranks(PAWN_EG_FLIP, PAWN_EG);
-        flip_ranks(KNIGHT_MG_FLIP, KNIGHT_MG);
-        flip_ranks(KNIGHT_EG_FLIP, KNIGHT_EG);
-        flip_ranks(BISHOP_MG_FLIP, BISHOP_MG);
-        flip_ranks(BISHOP_EG_FLIP, BISHOP_EG);
-        flip_ranks(ROOK_MG_FLIP, ROOK_MG);
-        flip_ranks(ROOK_EG_FLIP, ROOK_EG);
-        flip_ranks(QUEEN_MG_FLIP, QUEEN_MG);
-        flip_ranks(QUEEN_EG_FLIP, QUEEN_EG);
-        flip_ranks(KING_MG_FLIP, KING_MG);
-        flip_ranks(KING_EG_FLIP, KING_EG);
-    }
-} pst_init;
-
-// Use flipped versions (correctly oriented for a1=0 indexing)
-const int* PST_MG[] = {PAWN_MG_FLIP, KNIGHT_MG_FLIP, BISHOP_MG_FLIP, ROOK_MG_FLIP, QUEEN_MG_FLIP, KING_MG_FLIP};
-const int* PST_EG[] = {PAWN_EG_FLIP, KNIGHT_EG_FLIP, BISHOP_EG_FLIP, ROOK_EG_FLIP, QUEEN_EG_FLIP, KING_EG_FLIP};
+// PST arrays are already correctly oriented for a1=0 indexing (rank-1-first)
+// Use them directly without flipping
+const int* PST_MG[] = {PAWN_MG, KNIGHT_MG, BISHOP_MG, ROOK_MG, QUEEN_MG, KING_MG};
+const int* PST_EG[] = {PAWN_EG, KNIGHT_EG, BISHOP_EG, ROOK_EG, QUEEN_EG, KING_EG};
 
 // Helper to safely map PieceType to array indices (defensive against enum changes)
 inline int pt_index(PieceType pt) {
