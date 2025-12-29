@@ -68,14 +68,16 @@ BOT_ACCOUNT = client.account.get()
 BOT_ID = BOT_ACCOUNT['id']  # Lowercase ID is more reliable than 'username'
 print(f"🤖 Bot initialized as: {BOT_ACCOUNT['username']} ({BOT_ID})")
 
-# Initialize the C++ chess engine (depth 10 - much faster than Python!)
-engine = CppEngineAgent(depth=10, engine_path="./pasta_engine")
-print("✓ C++ Engine ready (depth 10)!\n")
+# Initialize the C++ chess engine (depth 9 for Rapid, depth 8 for Blitz)
+# Depth is set dynamically based on time control during gameplay
+engine = CppEngineAgent(depth=9, engine_path="./pasta_engine")
+print("✓ C++ Engine ready (default depth 9)!\n")
 
 # Store game-specific information (game_id -> color mapping)
 active_games = {}
 is_playing = False  # Global lock for max 1 game at a time
 game_start_times = {}  # Track when games start for watchdog
+game_time_controls = {}  # Track time control per game (for depth selection)
 
 # Thread safety: Lock to ensure only ONE thread accesses the engine at a time
 # This prevents race conditions where multiple games try to use the C++ engine simultaneously
@@ -218,6 +220,10 @@ def play_game(game_id):
             print(f"   - Removing from game_start_times")
             del game_start_times[game_id]
 
+        if game_id in game_time_controls:
+            print(f"   - Removing from game_time_controls")
+            del game_time_controls[game_id]
+
         print(f"✓ Cleanup complete - bot is now idle")
         print(f"🏁 Game Finished: {game_id}\n")
 
@@ -231,7 +237,7 @@ def handle_game_state(game_id, state, full_event=None):
         state: The game state dict
         full_event: The full event dict (only on first call with gameFull)
     """
-    global active_games
+    global active_games, game_time_controls
 
     # Determine our color (from full_event on first call, then from stored info)
     if full_event:
@@ -250,6 +256,16 @@ def handle_game_state(game_id, state, full_event=None):
         else:
             print("⚠️  Could not determine bot color!")
             return
+
+        # Extract and store time control for depth selection
+        clock = full_event.get('clock')
+        if clock:
+            initial_time = clock.get('initial', 0) // 1000  # Convert ms to seconds
+            increment = clock.get('increment', 0) // 1000
+            game_time_controls[game_id] = (initial_time, increment)
+            print(f"⏱️  Time control: {initial_time // 60}+{increment}")
+        else:
+            game_time_controls[game_id] = (0, 0)  # Unlimited or correspondence
 
         # Store for future state updates
         active_games[game_id] = our_color
@@ -279,6 +295,8 @@ def handle_game_state(game_id, state, full_event=None):
         # Clean up
         if game_id in active_games:
             del active_games[game_id]
+        if game_id in game_time_controls:
+            del game_time_controls[game_id]
         return
 
     # CRITICAL: Verify it's actually our turn before making a move
@@ -321,6 +339,19 @@ def handle_game_state(game_id, state, full_event=None):
     print(f"📊 Bot color: {'White' if our_color == chess.WHITE else 'Black'}")
     print(f"{'─'*60}")
 
+    # Determine search depth based on time control
+    # Blitz (< 5 minutes initial): depth 8 (~0.7s/move)
+    # Rapid (≥ 5 minutes): depth 9 (~2s/move)
+    time_control = game_time_controls.get(game_id, (600, 5))  # Default to 10+5
+    initial_time, increment = time_control
+
+    if initial_time < 300:  # Less than 5 minutes = Blitz
+        target_depth = 8
+        print(f"🏃 Blitz mode: Using depth {target_depth}")
+    else:  # 5+ minutes = Rapid/Classical
+        target_depth = 9
+        print(f"🧠 Rapid mode: Using depth {target_depth}")
+
     # Calculate the move using our engine
     start_time = time.time()
 
@@ -328,7 +359,7 @@ def handle_game_state(game_id, state, full_event=None):
     # This prevents timeouts on Koyeb's slower CPUs and allows deeper search when time permits
     # CRITICAL: Lock the engine to prevent race conditions from simultaneous access
     with engine_lock:
-        move, score = engine.select_move(board, endgame_time_limit=time_limit)
+        move, score = engine.select_move(board, endgame_time_limit=time_limit, target_depth=target_depth)
 
     elapsed = time.time() - start_time
 
