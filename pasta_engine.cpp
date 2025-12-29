@@ -203,7 +203,8 @@ public:
     std::vector<TTEntry> tt;
     Move killer_moves[128][2];
     int history_table[64][64];
-    int piece_values[6] = {100, 320, 330, 500, 900, 0};  // P N B R Q K
+    // Use same piece values as evaluation for consistency (PeSTO middlegame values)
+    int piece_values[6] = {82, 337, 365, 477, 1025, 0};  // P N B R Q K
 
     // Performance stats
     int nodes_searched;
@@ -514,7 +515,9 @@ public:
 
             if (alpha >= beta) {
                 tt_cutoffs++;
-                return (entry->flag == TT_LOWERBOUND) ? alpha : beta;
+                // In Minimax (not Negamax), return based on side to move:
+                // White (maximizing) returns alpha, Black (minimizing) returns beta
+                return (b.sideToMove() == Color::WHITE) ? alpha : beta;
             }
         } else {
             tt_misses++;

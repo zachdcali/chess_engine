@@ -154,23 +154,42 @@ class CppEngineAgent:
 
         Args:
             board: python-chess Board object
-            time_limit: Time limit (not used yet, C++ uses depth-based search)
+            time_limit: Time limit (not used, kept for compatibility)
             target_depth: Optional depth override
             endgame_time_limit: Time limit for this specific move
 
         Returns:
             Tuple of (move, score) where score may be None
         """
-        # Use target_depth if specified, otherwise use default
-        search_depth = target_depth if target_depth else self.depth
+        # Calculate game phase (0 = endgame, 24 = opening)
+        phase_values = {
+            chess.PAWN: 0,
+            chess.KNIGHT: 1,
+            chess.BISHOP: 1,
+            chess.ROOK: 2,
+            chess.QUEEN: 4,
+            chess.KING: 0
+        }
+        phase = sum(phase_values[piece.piece_type] for piece in board.piece_map().values())
+        phase = min(phase, 24)
 
         # Send position to engine
         fen = board.fen()
         self._send_command(f"position fen {fen}")
 
-        # Search
-        print(f"\n🚀 C++ Engine searching (depth {search_depth})...")
-        self._send_command(f"go depth {search_depth}")
+        # Decide search mode based on game phase
+        # Endgame (phase < 10): Use time-based search to go deeper
+        # Opening/Middlegame: Use fixed depth
+        if phase < 10 and not target_depth:
+            # Endgame: time-based search (5 seconds = 5000 ms)
+            movetime_ms = int(endgame_time_limit * 1000)
+            print(f"\n🚀 C++ Engine searching (endgame, {endgame_time_limit}s time limit, phase={phase}/24)...")
+            self._send_command(f"go movetime {movetime_ms}")
+        else:
+            # Opening/Middlegame: depth-based search
+            search_depth = target_depth if target_depth else self.depth
+            print(f"\n🚀 C++ Engine searching (depth {search_depth}, phase={phase}/24)...")
+            self._send_command(f"go depth {search_depth}")
 
         # Get best move and score
         move_uci, score = self._read_until_bestmove()
