@@ -179,16 +179,28 @@ def play_game(game_id):
                 # Chat message (ignore for now)
                 pass
 
-            # MOVE 1 WATCHDOG: Check if opponent hasn't moved after 5 minutes
-            # This prevents getting stuck when opponent abandons game before first move
+            # OPPONENT TIMEOUT WATCHDOG: Check if opponent hasn't moved after 5 minutes
+            # This prevents getting stuck when opponent abandons game
             if game_id in game_start_times and game_id in active_games:
                 elapsed = time.time() - game_start_times[game_id]
                 our_color = active_games[game_id]
                 moves = event.get('state', {}).get('moves', '') or event.get('moves', '')
+                move_list = moves.split() if moves else []
+                move_count = len(move_list)
 
-                # If we're Black and no moves after 5 minutes, abort
-                if our_color == chess.BLACK and moves == '' and elapsed > 300:  # 5 minutes
-                    print(f"⏰ WATCHDOG: Opponent hasn't moved after 5 minutes. Aborting game...")
+                # Abort if opponent hasn't moved after 5 minutes:
+                # Case 1: We're Black, opponent (White) hasn't made first move (0 moves total)
+                # Case 2: We're White, we moved, opponent (Black) hasn't responded (1 move total)
+                should_abort = False
+                if elapsed > 300:  # 5 minutes
+                    if our_color == chess.BLACK and move_count == 0:
+                        print(f"⏰ WATCHDOG: White hasn't made first move after 5 minutes. Aborting...")
+                        should_abort = True
+                    elif our_color == chess.WHITE and move_count == 1:
+                        print(f"⏰ WATCHDOG: Black hasn't responded to 1.{move_list[0]} after 5 minutes. Aborting...")
+                        should_abort = True
+
+                if should_abort:
                     try:
                         client.bots.abort_game(game_id)
                     except:
