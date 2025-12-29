@@ -22,6 +22,10 @@ using namespace chess;
 // PESTO EVALUATION TABLES (Centipawns)
 // ============================================================================
 
+// Search constants
+const int INF = 1000000;        // Infinity value for alpha-beta search windows
+const int MATE_VALUE = 100000;  // Base value for mate scores
+
 // Piece values (middlegame and endgame)
 const int PIECE_VALUES_MG[] = {82, 337, 365, 477, 1025, 0};  // P N B R Q K
 const int PIECE_VALUES_EG[] = {94, 281, 297, 512, 936, 0};
@@ -303,7 +307,7 @@ public:
             auto result = b.isGameOver();
             if (result.first == GameResultReason::CHECKMATE) {
                 // Mate score: favor faster mates
-                return (b.sideToMove() == Color::WHITE) ? -100000 + ply_from_root : 100000 - ply_from_root;
+                return (b.sideToMove() == Color::WHITE) ? -MATE_VALUE + ply_from_root : MATE_VALUE - ply_from_root;
             }
             // Stalemate or draw
             return 0;
@@ -420,7 +424,7 @@ public:
 
             // Check for checkmate
             if (moves.size() == 0) {
-                return (b.sideToMove() == Color::WHITE) ? -100000 + ply_from_root : 100000 - ply_from_root;
+                return (b.sideToMove() == Color::WHITE) ? -MATE_VALUE + ply_from_root : MATE_VALUE - ply_from_root;
             }
         } else {
             // Not in check: only generate captures (tactical search)
@@ -492,8 +496,9 @@ public:
 
     int minimax(Board& b, int depth, int alpha, int beta, int ply_from_root) {
         // Draw by repetition or 50-move rule
+        // CRITICAL: Only check after root (ply_from_root > 0) since root position can't be a repetition yet
         // isRepetition(2) checks for 3-fold repetition (2 previous occurrences)
-        if (b.isRepetition(2) || b.isHalfMoveDraw()) {
+        if (ply_from_root > 0 && (b.isRepetition(2) || b.isHalfMoveDraw())) {
             return 0;
         }
 
@@ -521,9 +526,9 @@ public:
             tt_hits++;
             int tt_score = entry->score;
 
-            // De-normalize mate scores
-            if (tt_score > 90000) tt_score -= ply_from_root;
-            else if (tt_score < -90000) tt_score += ply_from_root;
+            // De-normalize mate scores from TT (restore ply-relative mate distance)
+            if (tt_score >= MATE_VALUE - 1000) tt_score -= ply_from_root;
+            else if (tt_score <= -MATE_VALUE + 1000) tt_score += ply_from_root;
 
             if (entry->flag == TT_EXACT) {
                 tt_cutoffs++;
@@ -707,8 +712,9 @@ public:
 
         // Normalize mate scores for TT
         int stored_score = best_score;
-        if (stored_score > 90000) stored_score += ply_from_root;
-        else if (stored_score < -90000) stored_score -= ply_from_root;
+        // Normalize mate scores for TT storage (make mate distance ply-independent)
+        if (stored_score >= MATE_VALUE - 1000) stored_score += ply_from_root;
+        else if (stored_score <= -MATE_VALUE + 1000) stored_score -= ply_from_root;
 
         store_tt(hash, stored_score, depth, flag, best_move);
 
@@ -747,8 +753,8 @@ public:
                 beta = best_score + ASPIRATION_WINDOW;
                 use_aspiration = true;
             } else {
-                alpha = -100000;
-                beta = 100000;
+                alpha = -INF;
+                beta = INF;
             }
 
             int alpha_original = alpha;
@@ -760,7 +766,7 @@ public:
             // Check for aspiration window failures (only if time didn't run out)
             if (!time_up && use_aspiration && (score <= alpha_original || score >= beta_original)) {
                 // Re-search with full window
-                score = minimax(board, depth, -100000, 100000, 0);
+                score = minimax(board, depth, -INF, INF, 0);
             }
 
             // Only use this result if search completed (time didn't run out)
