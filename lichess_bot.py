@@ -534,20 +534,39 @@ def find_and_challenge_bot():
                 print(f"\n🎯 Challenging bot: {target_username}")
 
                 # Send challenge (10+5 Rapid, Rated)
-                # Rapid time control - C++ engine at depth 8 is fast enough
-                client.challenges.create(
-                    target_username,
-                    rated=True,  # Rated games to build rating
-                    clock_limit=600,  # 10 minutes
-                    clock_increment=5,  # 5 second increment
-                    color='random',
-                    variant='standard'
-                )
+                # Rapid time control - C++ engine at depth 9 is fast enough
+                try:
+                    client.challenges.create(
+                        target_username,
+                        rated=True,  # Rated games to build rating
+                        clock_limit=600,  # 10 minutes
+                        clock_increment=5,  # 5 second increment
+                        color='random',
+                        variant='standard'
+                    )
+                    print(f"✓ Challenge sent to {target_username} (10+5 Rapid)!")
 
-                print(f"✓ Challenge sent to {target_username} (10+5 Rapid)!")
+                except Exception as challenge_error:
+                    error_msg = str(challenge_error)
+
+                    # Check for 100-game daily bot limit (HTTP 429)
+                    if "429" in error_msg or "100 games against other bots" in error_msg:
+                        print(f"\n{'='*60}")
+                        print(f"🚫 DAILY BOT LIMIT REACHED")
+                        print(f"{'='*60}")
+                        print(f"⚠️  Lichess limit: 100 bot-vs-bot games per 24 hours")
+                        print(f"⚠️  Hunter mode will pause until limit resets")
+                        print(f"⚠️  You can still accept challenges from humans!")
+                        print(f"{'='*60}\n")
+
+                        # Sleep for a long time (check again in 4 hours)
+                        # Lichess resets the limit on a rolling 24-hour window
+                        return  # Exit challenge function - hunter will retry in 2 min naturally
+                    else:
+                        print(f"⚠️  Could not challenge {target_username}: {challenge_error}")
 
         except Exception as e:
-            print(f"⚠️  Could not challenge bot: {e}")
+            print(f"⚠️  Error in challenge logic: {e}")
 
     except Exception as e:
         print(f"⚠️  Error in hunter mode: {e}")
