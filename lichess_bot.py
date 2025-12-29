@@ -653,36 +653,49 @@ def main():
     # Start hunter mode - actively seek games with other bots
     start_hunter_mode()
 
-    # Stream incoming events (challenges and games)
-    for event in client.bots.stream_incoming_events():
-        if event['type'] == 'challenge':
-            # New challenge received
-            accept_challenge(event)
-        elif event['type'] == 'gameStart':
-            # Game is starting - run in a separate thread so event loop continues
-            game_id = event['game']['id']
+    # Stream incoming events (challenges and games) with reconnect logic
+    # If stream closes, reconnect and continue (prevents bot from exiting)
+    while True:
+        try:
+            print("📡 Connecting to Lichess event stream...")
+            for event in client.bots.stream_incoming_events():
+                if event['type'] == 'challenge':
+                    # New challenge received
+                    accept_challenge(event)
+                elif event['type'] == 'gameStart':
+                    # Game is starting - run in a separate thread so event loop continues
+                    game_id = event['game']['id']
 
-            # FIX RACE CONDITION: Check if already playing before starting new thread
-            if is_playing:
-                print(f"⚠️  Ignoring gameStart for {game_id} - already in a game.")
-                print(f"⚠️  This game will likely be aborted by Lichess due to no moves.")
-                continue
+                    # FIX RACE CONDITION: Check if already playing before starting new thread
+                    if is_playing:
+                        print(f"⚠️  Ignoring gameStart for {game_id} - already in a game.")
+                        print(f"⚠️  This game will likely be aborted by Lichess due to no moves.")
+                        continue
 
-            print(f"\n🎮 Game starting: {game_id}")
+                    print(f"\n🎮 Game starting: {game_id}")
 
-            # Set lock IMMEDIATELY to prevent another gameStart event from racing
-            is_playing = True
+                    # Set lock IMMEDIATELY to prevent another gameStart event from racing
+                    is_playing = True
 
-            # Run game in thread so we can still receive events (abort, chat, etc.)
-            game_thread = threading.Thread(target=play_game, args=(game_id,), daemon=False)
-            game_thread.start()
-        elif event['type'] == 'gameFinish':
-            # Game finished
-            game_id = event['game']['id']
-            print(f"\n🏁 Game finished: {game_id}\n")
-            print(f"{'='*60}")
-            print(f"📡 Ready for next challenge...")
-            print(f"{'='*60}\n")
+                    # Run game in thread so we can still receive events (abort, chat, etc.)
+                    game_thread = threading.Thread(target=play_game, args=(game_id,), daemon=False)
+                    game_thread.start()
+                elif event['type'] == 'gameFinish':
+                    # Game finished
+                    game_id = event['game']['id']
+                    print(f"\n🏁 Game finished: {game_id}\n")
+                    print(f"{'='*60}")
+                    print(f"📡 Ready for next challenge...")
+                    print(f"{'='*60}\n")
+
+            # If we reach here, stream ended - reconnect after delay
+            print("⚠️  Event stream ended. Reconnecting in 5 seconds...")
+            time.sleep(5)
+
+        except Exception as e:
+            print(f"❌ Error in event stream: {e}")
+            print("🔄 Reconnecting in 10 seconds...")
+            time.sleep(10)
 
 
 if __name__ == "__main__":
