@@ -68,9 +68,9 @@ BOT_ACCOUNT = client.account.get()
 BOT_ID = BOT_ACCOUNT['id']  # Lowercase ID is more reliable than 'username'
 print(f"🤖 Bot initialized as: {BOT_ACCOUNT['username']} ({BOT_ID})")
 
-# Initialize the C++ chess engine (depth 8 - much faster than Python!)
-engine = CppEngineAgent(depth=8, engine_path="./pasta_engine")
-print("✓ C++ Engine ready (depth 8)!\n")
+# Initialize the C++ chess engine (depth 10 - much faster than Python!)
+engine = CppEngineAgent(depth=10, engine_path="./pasta_engine")
+print("✓ C++ Engine ready (depth 10)!\n")
 
 # Store game-specific information (game_id -> color mapping)
 active_games = {}
@@ -344,16 +344,24 @@ def handle_game_state(game_id, state, full_event=None):
     print(f"⏱️  Calculation time: {elapsed:.2f}s")
     print(f"{'─'*60}\n")
 
-    # Make the move on Lichess
-    try:
-        client.bots.make_move(game_id, move.uci())
-        print(f"📤 Move sent to Lichess: {move.uci()}")
-    except Exception as e:
-        print(f"❌ Error making move {move.uci()} in game {game_id}: {e}")
-        print(f"⚠️  This may cause timeout loss if move wasn't transmitted")
-        # Don't crash the thread - let the stream continue and handle game end
-        import traceback
-        traceback.print_exc()
+    # Make the move on Lichess with retry logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client.bots.make_move(game_id, move.uci())
+            print(f"📤 Move sent to Lichess: {move.uci()}")
+            break  # Success - exit retry loop
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 0.5 * (2 ** attempt)  # Exponential backoff: 0.5s, 1s, 2s
+                print(f"⚠️  Move send failed (attempt {attempt + 1}/{max_retries}): {e}")
+                print(f"   Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"❌ Error making move {move.uci()} after {max_retries} attempts: {e}")
+                print(f"⚠️  This may cause timeout loss if move wasn't transmitted")
+                import traceback
+                traceback.print_exc()
 
 
 def accept_challenge(event):
