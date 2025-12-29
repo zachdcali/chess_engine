@@ -212,9 +212,30 @@ public:
     int tt_hits, tt_misses, tt_cutoffs;
     int alpha_cutoffs;
 
+    // Time management
+    std::chrono::steady_clock::time_point search_start_time;
+    int search_time_limit_ms;
+    bool time_up;
+
     Engine() {
         tt.resize(TT_SIZE);
         clear_tables();
+        search_time_limit_ms = 0;
+        time_up = false;
+    }
+
+    // Check if we've exceeded our time limit (called periodically during search)
+    inline bool check_time() {
+        // Only check every 2048 nodes to minimize overhead (bitwise AND is faster than modulo)
+        if (search_time_limit_ms > 0 && (nodes_searched & 2047) == 0) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - search_start_time).count();
+            if (elapsed >= search_time_limit_ms) {
+                time_up = true;
+                return true;
+            }
+        }
+        return time_up;  // Always return current status
     }
 
     void clear_tables() {
@@ -605,6 +626,16 @@ public:
 
         // Search all moves
         for (const auto& m : moves) {
+            // TIME MANAGEMENT: Check if time limit exceeded
+            // Check at root and periodically at other levels via nodes_searched counter
+            if (check_time()) {
+                // Time is up - return best move found so far
+                if (best_move == Move::NO_MOVE && moves.size() > 0) {
+                    best_move = moves[0];  // Emergency fallback
+                }
+                break;
+            }
+
             // Check if move is quiet BEFORE making it (for killer/history updates)
             bool is_capture = (b.at(m.to()) != Piece::NONE) || (m.typeOf() == Move::ENPASSANT);
             bool is_quiet = !is_capture && (m.typeOf() != Move::PROMOTION);
@@ -612,6 +643,14 @@ public:
             b.makeMove(m);
             int score = minimax(b, depth - 1, alpha, beta, ply_from_root + 1);
             b.unmakeMove(m);
+
+            // TIME MANAGEMENT: Abort if time ran out during recursive call
+            if (time_up) {
+                if (best_move == Move::NO_MOVE && moves.size() > 0) {
+                    best_move = moves[0];  // Emergency fallback
+                }
+                break;
+            }
 
             if (b.sideToMove() == Color::WHITE) {
                 if (score > best_score) {
@@ -681,13 +720,23 @@ public:
         quiescence_nodes = 0;
         tt_hits = tt_misses = tt_cutoffs = alpha_cutoffs = 0;
 
-        auto start = std::chrono::steady_clock::now();
+        // Initialize time management
+        search_start_time = std::chrono::steady_clock::now();
+        search_time_limit_ms = time_limit_ms;
+        time_up = false;
+
+        auto start = search_start_time;  // Reuse the same start time
 
         Move best_move = Move::NO_MOVE;
         int best_score = 0;
+        Move last_completed_move = Move::NO_MOVE;  // Track last fully completed depth
 
         // Iterative deepening with aspiration windows
         for (int depth = 1; depth <= max_depth; depth++) {
+            // Stop if time is already up (previous depth took too long)
+            if (time_up) {
+                break;
+            }
             // ASPIRATION WINDOWS: Use narrow window from depth 2+ (20-40% speedup)
             const int ASPIRATION_WINDOW = 50;
             int alpha, beta;
@@ -708,25 +757,24 @@ public:
             // Search with aspiration window
             int score = minimax(board, depth, alpha, beta, 0);
 
-            // Check for aspiration window failures
-            if (use_aspiration && (score <= alpha_original || score >= beta_original)) {
+            // Check for aspiration window failures (only if time didn't run out)
+            if (!time_up && use_aspiration && (score <= alpha_original || score >= beta_original)) {
                 // Re-search with full window
                 score = minimax(board, depth, -100000, 100000, 0);
             }
 
-            TTEntry* entry = probe_tt(board.hash());
-            if (entry != nullptr) {
-                best_move = entry->best_move;
-                best_score = score;
-            }
-
-            // Time management check
-            if (time_limit_ms > 0) {
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-                if (elapsed >= time_limit_ms && depth >= 3) {
-                    break;  // Stop if we've used our time and reached minimum depth
+            // Only use this result if search completed (time didn't run out)
+            if (!time_up) {
+                TTEntry* entry = probe_tt(board.hash());
+                if (entry != nullptr) {
+                    last_completed_move = entry->best_move;  // Save completed depth result
+                    best_move = last_completed_move;
+                    best_score = score;
                 }
+            } else {
+                // Time ran out during this depth - use last completed depth
+                // best_move already contains last_completed_move
+                break;
             }
 
             auto now = std::chrono::steady_clock::now();
@@ -737,19 +785,31 @@ public:
             float tt_hit_rate = (total_tt > 0) ? (tt_hits * 100.0 / total_tt) : 0.0;
             float qs_pct = (nodes_searched > 0) ? (quiescence_nodes * 100.0 / nodes_searched) : 0.0;
 
-            std::cout << "info depth " << depth
-                      << " score cp " << best_score
-                      << " nodes " << nodes_searched
-                      << " time " << elapsed
-                      << " nps " << (elapsed > 0 ? (nodes_searched * 1000 / elapsed) : 0)
-                      << " pv " << uci::moveToUci(best_move)
-                      << " tthits " << tt_hits
-                      << " ttrate " << (int)tt_hit_rate
-                      << " ttcutoffs " << tt_cutoffs
-                      << " abcutoffs " << alpha_cutoffs
-                      << " qsnodes " << quiescence_nodes
-                      << " qspct " << (int)qs_pct
-                      << std::endl;
+            // Only print info for completed depths
+            if (!time_up) {
+                std::cout << "info depth " << depth
+                          << " score cp " << best_score
+                          << " nodes " << nodes_searched
+                          << " time " << elapsed
+                          << " nps " << (elapsed > 0 ? (nodes_searched * 1000 / elapsed) : 0)
+                          << " pv " << uci::moveToUci(best_move)
+                          << " tthits " << tt_hits
+                          << " ttrate " << (int)tt_hit_rate
+                          << " ttcutoffs " << tt_cutoffs
+                          << " abcutoffs " << alpha_cutoffs
+                          << " qsnodes " << quiescence_nodes
+                          << " qspct " << (int)qs_pct
+                          << std::endl;
+            }
+        }
+
+        // Safety: If no move was found (extremely rare), pick first legal move
+        if (best_move == Move::NO_MOVE) {
+            Movelist moves;
+            movegen::legalmoves(moves, board);
+            if (moves.size() > 0) {
+                best_move = moves[0];
+            }
         }
 
         return best_move;

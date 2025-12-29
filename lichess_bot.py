@@ -77,6 +77,10 @@ active_games = {}
 is_playing = False  # Global lock for max 1 game at a time
 game_start_times = {}  # Track when games start for watchdog
 
+# Thread safety: Lock to ensure only ONE thread accesses the engine at a time
+# This prevents race conditions where multiple games try to use the C++ engine simultaneously
+engine_lock = threading.Lock()
+
 def calculate_time_limit(wtime, btime, winc, binc, board):
     """
     Calculate the time limit for this move based on time control.
@@ -148,7 +152,8 @@ def play_game(game_id):
     global is_playing, game_start_times
 
     try:
-        is_playing = True  # Lock to prevent accepting other challenges
+        # NOTE: is_playing is already set to True in main() before this thread starts
+        # This prevents race conditions where multiple gameStart events overlap
         game_start_times[game_id] = time.time()  # Track when game started
 
         print(f"\n{'='*60}")
@@ -194,17 +199,27 @@ def play_game(game_id):
                 break
 
     except Exception as e:
-        print(f"❌ Stream Error: {e}")
+        print(f"❌ Stream Error in game {game_id}: {e}")
         import traceback
         traceback.print_exc()
+        print(f"⚠️  Game thread crashed - cleaning up to prevent zombie state")
     finally:
-        # ALWAYS release the lock when game ends (even if crashed)
+        # CRITICAL: ALWAYS release the lock when game ends (even if crashed)
+        # This prevents "zombie state" where bot appears busy but isn't playing
+        print(f"\n🧹 Cleanup for game {game_id}:")
+        print(f"   - Releasing is_playing lock")
         is_playing = False
+
         if game_id in active_games:
+            print(f"   - Removing from active_games")
             del active_games[game_id]
+
         if game_id in game_start_times:
+            print(f"   - Removing from game_start_times")
             del game_start_times[game_id]
-        print(f"\n🏁 Game Finished: {game_id}")
+
+        print(f"✓ Cleanup complete - bot is now idle")
+        print(f"🏁 Game Finished: {game_id}\n")
 
 
 def handle_game_state(game_id, state, full_event=None):
@@ -311,7 +326,9 @@ def handle_game_state(game_id, state, full_event=None):
 
     # Use time-limited iterative deepening for ALL phases (middlegame and endgame)
     # This prevents timeouts on Koyeb's slower CPUs and allows deeper search when time permits
-    move, score = engine.select_move(board, endgame_time_limit=time_limit)
+    # CRITICAL: Lock the engine to prevent race conditions from simultaneous access
+    with engine_lock:
+        move, score = engine.select_move(board, endgame_time_limit=time_limit)
 
     elapsed = time.time() - start_time
 
@@ -332,7 +349,11 @@ def handle_game_state(game_id, state, full_event=None):
         client.bots.make_move(game_id, move.uci())
         print(f"📤 Move sent to Lichess: {move.uci()}")
     except Exception as e:
-        print(f"❌ Error making move: {e}")
+        print(f"❌ Error making move {move.uci()} in game {game_id}: {e}")
+        print(f"⚠️  This may cause timeout loss if move wasn't transmitted")
+        # Don't crash the thread - let the stream continue and handle game end
+        import traceback
+        traceback.print_exc()
 
 
 def accept_challenge(event):
@@ -423,6 +444,18 @@ def find_and_challenge_bot():
     # Safety check: Don't send challenges if already in a game
     if is_playing:
         print(f"⚠️  Skipping challenge: Already in a game")
+        return
+
+    # CRITICAL FIX: Make live API call to verify no ongoing games
+    # This prevents challenging while a game is "finishing" but not fully closed
+    try:
+        ongoing_games = list(client.games.get_ongoing(count=5))
+        if len(ongoing_games) > 0:
+            print(f"⚠️  Skipping challenge: Found {len(ongoing_games)} ongoing game(s) via API")
+            return
+    except Exception as e:
+        print(f"⚠️  Could not verify ongoing games: {e}")
+        # If API call fails, be conservative and don't challenge
         return
 
     try:
@@ -575,7 +608,18 @@ def main():
         elif event['type'] == 'gameStart':
             # Game is starting - run in a separate thread so event loop continues
             game_id = event['game']['id']
+
+            # FIX RACE CONDITION: Check if already playing before starting new thread
+            if is_playing:
+                print(f"⚠️  Ignoring gameStart for {game_id} - already in a game.")
+                print(f"⚠️  This game will likely be aborted by Lichess due to no moves.")
+                continue
+
             print(f"\n🎮 Game starting: {game_id}")
+
+            # Set lock IMMEDIATELY to prevent another gameStart event from racing
+            is_playing = True
+
             # Run game in thread so we can still receive events (abort, chat, etc.)
             game_thread = threading.Thread(target=play_game, args=(game_id,), daemon=False)
             game_thread.start()
