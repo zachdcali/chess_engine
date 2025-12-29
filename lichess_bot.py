@@ -445,8 +445,8 @@ def accept_challenge(event):
         return
 
     # Accept standard chess challenges only (all time controls)
-    # Note: Engine is optimized for Classical (30+20) but will play any time control
-    if variant == 'standard':
+    # Note: Engine is optimized for Rapid (10+5) but will play any time control
+    if variant.lower() == 'standard':
         try:
             client.bots.accept_challenge(challenge_id)
             print(f"✓ Challenge accepted!")
