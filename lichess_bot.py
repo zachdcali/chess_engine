@@ -573,6 +573,8 @@ def main():
     """
     Main bot loop: listen for events and handle challenges/games.
     """
+    global is_playing  # Needed because we modify is_playing in this function
+
     # Upgrade account to BOT status (only needs to be done once, but safe to call multiple times)
     try:
         print("🔧 Upgrading account to BOT status...")
