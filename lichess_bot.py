@@ -551,17 +551,41 @@ def find_and_challenge_bot():
 
                     # Check for 100-game daily bot limit (HTTP 429)
                     if "429" in error_msg or "100 games against other bots" in error_msg:
+                        # Try to extract wait time from error response
+                        # Lichess returns: {"error": "...", "seconds": 10703}
+                        wait_seconds = None
+                        try:
+                            # The error might contain JSON with seconds field
+                            import re
+                            # Look for "seconds": NNNN pattern
+                            match = re.search(r'"seconds":\s*(\d+)', error_msg)
+                            if match:
+                                wait_seconds = int(match.group(1))
+                        except:
+                            pass
+
+                        # Calculate hours/minutes for display
+                        if wait_seconds:
+                            hours = wait_seconds // 3600
+                            minutes = (wait_seconds % 3600) // 60
+                            wait_display = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                        else:
+                            wait_display = "unknown (will retry in 1 hour)"
+                            wait_seconds = 3600  # Default to 1 hour if we can't parse
+
                         print(f"\n{'='*60}")
                         print(f"🚫 DAILY BOT LIMIT REACHED")
                         print(f"{'='*60}")
                         print(f"⚠️  Lichess limit: 100 bot-vs-bot games per 24 hours")
-                        print(f"⚠️  Hunter mode will pause until limit resets")
+                        print(f"⚠️  Time until limit resets: {wait_display}")
+                        print(f"⚠️  Hunter mode sleeping until then...")
                         print(f"⚠️  You can still accept challenges from humans!")
                         print(f"{'='*60}\n")
 
-                        # Sleep for a long time (check again in 4 hours)
-                        # Lichess resets the limit on a rolling 24-hour window
-                        return  # Exit challenge function - hunter will retry in 2 min naturally
+                        # Sleep for the exact time Lichess told us
+                        time.sleep(wait_seconds)
+                        print(f"⏰ Limit should be reset now. Resuming hunter mode...")
+                        return  # Return to hunter loop
                     else:
                         print(f"⚠️  Could not challenge {target_username}: {challenge_error}")
 
