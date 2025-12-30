@@ -496,9 +496,9 @@ public:
 
     int minimax(Board& b, int depth, int alpha, int beta, int ply_from_root) {
         // Draw by repetition or 50-move rule
-        // CRITICAL: Only check after root (ply_from_root > 0) since root position can't be a repetition yet
+        // Check at ALL ply levels (including root) to avoid walking into draws when winning
         // isRepetition(2) checks for 3-fold repetition (2 previous occurrences)
-        if (ply_from_root > 0 && (b.isRepetition(2) || b.isHalfMoveDraw())) {
+        if (b.isRepetition(2) || b.isHalfMoveDraw()) {
             return 0;
         }
 
