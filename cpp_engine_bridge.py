@@ -173,9 +173,16 @@ class CppEngineAgent:
         phase = sum(phase_values[piece.piece_type] for piece in board.piece_map().values())
         phase = min(phase, 24)
 
-        # Send position to engine
-        fen = board.fen()
-        self._send_command(f"position fen {fen}")
+        # Send position to engine with full move history for repetition detection
+        # We need the move history, not just the FEN, so isRepetition() works correctly
+        move_stack = board.move_stack
+        if move_stack:
+            # Build move list from the game history
+            moves_uci = " ".join([move.uci() for move in move_stack])
+            self._send_command(f"position startpos moves {moves_uci}")
+        else:
+            # No moves yet, just send startpos
+            self._send_command("position startpos")
 
         # Decide search mode based on game phase
         # Endgame (phase < 10): Use time-based search to go deeper
