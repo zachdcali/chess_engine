@@ -6,6 +6,16 @@ __pycache__/
 venv/
 ENV/
 
+# Compiled binaries
+pasta_engine
+*.exe
+*.o
+*.out
+*.obj
+*.dll
+*.so
+*.dylib
+
 # IDE
 .vscode/
 .idea/
