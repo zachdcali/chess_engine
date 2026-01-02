@@ -144,6 +144,45 @@ def calculate_time_limit(wtime, btime, winc, binc, board):
     return time_limit
 
 
+def watchdog_thread(game_id, game_state_tracker):
+    """
+    Watchdog thread that checks if opponent has abandoned the game.
+    Aborts if opponent doesn't move within 5 minutes.
+
+    Args:
+        game_id: The game ID to monitor
+        game_state_tracker: Dict with 'move_count', 'our_color', updated by main thread
+    """
+    while game_id in game_start_times and game_id in active_games:
+        time.sleep(30)  # Check every 30 seconds
+
+        if game_id not in game_start_times or game_id not in active_games:
+            break  # Game ended, exit watchdog
+
+        elapsed = time.time() - game_start_times[game_id]
+
+        # Check abort conditions after 5 minutes
+        if elapsed > 300 and 'move_count' in game_state_tracker and 'our_color' in game_state_tracker:
+            move_count = game_state_tracker['move_count']
+            our_color = game_state_tracker['our_color']
+            should_abort = False
+
+            if our_color == chess.BLACK and move_count == 0:
+                print(f"⏰ WATCHDOG: White hasn't made first move after 5 minutes. Aborting...")
+                should_abort = True
+            elif our_color == chess.WHITE and move_count == 1:
+                print(f"⏰ WATCHDOG: Black hasn't responded after 5 minutes. Aborting...")
+                should_abort = True
+
+            if should_abort:
+                try:
+                    client.bots.abort_game(game_id)
+                    print(f"✓ Game {game_id} aborted due to opponent inactivity")
+                except Exception as e:
+                    print(f"⚠️  Could not abort game {game_id}: {e}")
+                break
+
+
 def play_game(game_id):
     """
     Play a single game by streaming game state and making moves.
@@ -166,8 +205,22 @@ def play_game(game_id):
         print("🧹 Clearing transposition table for new game...")
         engine.clear_tt()
 
+        # Shared state tracker for watchdog thread
+        game_state_tracker = {}
+
+        # Start watchdog thread to abort if opponent doesn't move
+        watchdog = threading.Thread(target=watchdog_thread, args=(game_id, game_state_tracker), daemon=True)
+        watchdog.start()
+
         # Stream the game state
         for event in client.bots.stream_game_state(game_id):
+            # Update game state tracker for watchdog
+            if game_id in active_games:
+                moves = event.get('state', {}).get('moves', '') or event.get('moves', '')
+                move_list = moves.split() if moves else []
+                game_state_tracker['move_count'] = len(move_list)
+                game_state_tracker['our_color'] = active_games[game_id]
+
             # Handle different event types
             if event['type'] == 'gameFull':
                 # Initial game state
@@ -178,34 +231,6 @@ def play_game(game_id):
             elif event['type'] == 'chatLine':
                 # Chat message (ignore for now)
                 pass
-
-            # OPPONENT TIMEOUT WATCHDOG: Check if opponent hasn't moved after 5 minutes
-            # This prevents getting stuck when opponent abandons game
-            if game_id in game_start_times and game_id in active_games:
-                elapsed = time.time() - game_start_times[game_id]
-                our_color = active_games[game_id]
-                moves = event.get('state', {}).get('moves', '') or event.get('moves', '')
-                move_list = moves.split() if moves else []
-                move_count = len(move_list)
-
-                # Abort if opponent hasn't moved after 5 minutes:
-                # Case 1: We're Black, opponent (White) hasn't made first move (0 moves total)
-                # Case 2: We're White, we moved, opponent (Black) hasn't responded (1 move total)
-                should_abort = False
-                if elapsed > 300:  # 5 minutes
-                    if our_color == chess.BLACK and move_count == 0:
-                        print(f"⏰ WATCHDOG: White hasn't made first move after 5 minutes. Aborting...")
-                        should_abort = True
-                    elif our_color == chess.WHITE and move_count == 1:
-                        print(f"⏰ WATCHDOG: Black hasn't responded to 1.{move_list[0]} after 5 minutes. Aborting...")
-                        should_abort = True
-
-                if should_abort:
-                    try:
-                        client.bots.abort_game(game_id)
-                    except:
-                        pass  # Game might already be over
-                    break
 
             # Check if game ended
             status = event.get('status') or event.get('state', {}).get('status')
@@ -533,18 +558,18 @@ def find_and_challenge_bot():
 
                 print(f"\n🎯 Challenging bot: {target_username}")
 
-                # Send challenge (10+5 Rapid, Rated)
-                # Rapid time control - C++ engine at depth 9 is fast enough
+                # Send challenge (3+2 Blitz, Rated)
+                # Blitz time control - C++ engine at depth 8 is fast enough (~0.7s/move)
                 try:
                     client.challenges.create(
                         target_username,
                         rated=True,  # Rated games to build rating
-                        clock_limit=600,  # 10 minutes
-                        clock_increment=5,  # 5 second increment
+                        clock_limit=180,  # 3 minutes
+                        clock_increment=2,  # 2 second increment
                         color='random',
                         variant='standard'
                     )
-                    print(f"✓ Challenge sent to {target_username} (10+5 Rapid)!")
+                    print(f"✓ Challenge sent to {target_username} (3+2 Blitz)!")
 
                 except Exception as challenge_error:
                     error_msg = str(challenge_error)
