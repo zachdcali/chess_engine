@@ -377,17 +377,18 @@ def handle_game_state(game_id, state, full_event=None):
     print(f"{'─'*60}")
 
     # Determine search depth based on time control
-    # Blitz (< 5 minutes initial): depth 8 (~0.7s/move)
-    # Rapid (≥ 5 minutes): depth 9 (~2s/move)
+    # Blitz (< 5 minutes initial): depth 9 (~2-3s/move)
+    # Rapid (≥ 5 minutes): depth 9 (~2-3s/move)
+    # Classical (≥ 15 minutes): depth 10 (~5-8s/move)
     time_control = game_time_controls.get(game_id, (600, 5))  # Default to 10+5
     initial_time, increment = time_control
 
-    if initial_time < 300:  # Less than 5 minutes = Blitz
-        target_depth = 8
-        print(f"🏃 Blitz mode: Using depth {target_depth}")
-    else:  # 5+ minutes = Rapid/Classical
+    if initial_time >= 900:  # 15+ minutes = Classical
+        target_depth = 10
+        print(f"♟️  Classical mode: Using depth {target_depth}")
+    else:  # Under 15 minutes = Blitz/Rapid
         target_depth = 9
-        print(f"🧠 Rapid mode: Using depth {target_depth}")
+        print(f"🧠 Blitz/Rapid mode: Using depth {target_depth}")
 
     # Calculate the move using our engine
     start_time = time.time()
