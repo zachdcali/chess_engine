@@ -162,9 +162,11 @@ def watchdog_thread(game_id, game_state_tracker):
         elapsed = time.time() - game_start_times[game_id]
 
         # Check abort conditions after 5 minutes
-        if elapsed > 300 and 'move_count' in game_state_tracker and 'our_color' in game_state_tracker:
-            move_count = game_state_tracker['move_count']
-            our_color = game_state_tracker['our_color']
+        # Ensure we have valid state data before checking
+        move_count = game_state_tracker.get('move_count')
+        our_color = game_state_tracker.get('our_color')
+
+        if elapsed > 300 and move_count is not None and our_color is not None:
             should_abort = False
 
             if our_color == chess.BLACK and move_count == 0:
@@ -206,7 +208,8 @@ def play_game(game_id):
         engine.clear_tt()
 
         # Shared state tracker for watchdog thread
-        game_state_tracker = {}
+        # IMPORTANT: Initialize with empty values - will be populated on first event
+        game_state_tracker = {'move_count': None, 'our_color': None}
 
         # Start watchdog thread to abort if opponent doesn't move
         watchdog = threading.Thread(target=watchdog_thread, args=(game_id, game_state_tracker), daemon=True)
@@ -214,11 +217,14 @@ def play_game(game_id):
 
         # Stream the game state
         for event in client.bots.stream_game_state(game_id):
-            # Update game state tracker for watchdog
+            # Update game state tracker for watchdog (on EVERY event)
+            # This ensures watchdog has current state even if opponent doesn't move
+            moves = event.get('state', {}).get('moves', '') or event.get('moves', '')
+            move_list = moves.split() if moves else []
+            game_state_tracker['move_count'] = len(move_list)
+
+            # Get our color from active_games (set during gameFull event)
             if game_id in active_games:
-                moves = event.get('state', {}).get('moves', '') or event.get('moves', '')
-                move_list = moves.split() if moves else []
-                game_state_tracker['move_count'] = len(move_list)
                 game_state_tracker['our_color'] = active_games[game_id]
 
             # Handle different event types
@@ -377,17 +383,21 @@ def handle_game_state(game_id, state, full_event=None):
     print(f"{'─'*60}")
 
     # Determine search depth based on time control
-    # Blitz (< 5 minutes initial): depth 8 (~0.7s/move)
-    # Rapid (≥ 5 minutes): depth 9 (~2s/move)
+    # Blitz (< 5 minutes initial): depth 9 (~2-3s/move)
+    # Rapid (5-15 minutes): depth 10 (~3-5s/move)
+    # Classical (≥ 15 minutes): depth 10 (~5-8s/move)
     time_control = game_time_controls.get(game_id, (600, 5))  # Default to 10+5
     initial_time, increment = time_control
 
-    if initial_time < 300:  # Less than 5 minutes = Blitz
-        target_depth = 8
-        print(f"🏃 Blitz mode: Using depth {target_depth}")
-    else:  # 5+ minutes = Rapid/Classical
+    if initial_time >= 300:  # 5+ minutes = Rapid/Classical
+        target_depth = 10
+        if initial_time >= 900:
+            print(f"♟️  Classical mode: Using depth {target_depth}")
+        else:
+            print(f"⚡ Rapid mode: Using depth {target_depth}")
+    else:  # Under 5 minutes = Blitz
         target_depth = 9
-        print(f"🧠 Rapid mode: Using depth {target_depth}")
+        print(f"🧠 Blitz mode: Using depth {target_depth}")
 
     # Calculate the move using our engine
     start_time = time.time()
