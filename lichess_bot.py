@@ -123,16 +123,29 @@ def calculate_time_limit(wtime, btime, winc, binc, board):
         our_time = btime_sec
         our_inc = binc_sec
 
+    # ENDGAME DETECTION: Count total pieces to determine game phase
+    # Endgames are critical and benefit from deeper search, so we allocate more time
+    piece_count = len(board.piece_map())
+    is_endgame = piece_count <= 10  # 10 or fewer pieces = endgame
+
     # Time management formula: divide remaining time over expected moves + use most of increment
-    # Assume ~40 moves remaining in the game
-    EXPECTED_MOVES = 40
-    INCREMENT_USAGE = 0.8  # Use 80% of increment
+    # Endgames have fewer moves remaining, so we can use more time per move
+    if is_endgame:
+        EXPECTED_MOVES = 20  # Fewer moves in endgame, use more time per move
+        INCREMENT_USAGE = 0.9  # Use 90% of increment in endgame
+        ENDGAME_TIME_MULTIPLIER = 1.5  # Use 50% more time in endgame (helps avoid horizon effect)
+    else:
+        EXPECTED_MOVES = 40  # Normal middlegame
+        INCREMENT_USAGE = 0.8  # Use 80% of increment
+        ENDGAME_TIME_MULTIPLIER = 1.0
 
     # Base time per move
     time_per_move = (our_time / EXPECTED_MOVES) + (our_inc * INCREMENT_USAGE)
+    time_per_move *= ENDGAME_TIME_MULTIPLIER
 
     # Safety margin: never use more than 1/10 of remaining time on a single move
-    max_time = our_time / 10.0
+    # In endgame, allow up to 1/8 of remaining time (more aggressive)
+    max_time = our_time / (8.0 if is_endgame else 10.0)
 
     # Ensure we have at least 0.1 seconds, but cap at max_time
     time_limit = max(0.1, min(time_per_move, max_time))
@@ -372,31 +385,35 @@ def handle_game_state(game_id, state, full_event=None):
     wtime_sec = to_seconds(wtime)
     btime_sec = to_seconds(btime)
 
+    # Check if we're in endgame for display purposes
+    piece_count = len(board.piece_map())
+    is_endgame = piece_count <= 10
+
     print(f"\n{'─'*60}")
     print(f"🧠 Bot's turn ({'White' if our_color == chess.WHITE else 'Black'})")
     print(f"⏱️  Time remaining: {wtime_sec:.1f}s (W) | {btime_sec:.1f}s (B)")
-    print(f"⏱️  Time limit for this move: {time_limit:.2f}s")
-    print(f"📊 Position: {len(board.move_stack)} moves played")
+    print(f"⏱️  Time limit for this move: {time_limit:.2f}s" + (" [ENDGAME +50%]" if is_endgame else ""))
+    print(f"📊 Position: {len(board.move_stack)} moves played | {piece_count} pieces")
     print(f"📊 Board FEN: {board.fen()}")
     print(f"📊 Turn to move: {'White' if board.turn == chess.WHITE else 'Black'}")
     print(f"📊 Bot color: {'White' if our_color == chess.WHITE else 'Black'}")
     print(f"{'─'*60}")
 
     # Determine search depth based on time control
-    # Blitz (< 5 minutes initial): depth 9 (~2-3s/move)
-    # Rapid (5-15 minutes): depth 10 (~3-5s/move)
-    # Classical (≥ 15 minutes): depth 10 (~5-8s/move)
+    # Blitz (< 5 minutes initial): depth 10 (~3-5s/move)
+    # Rapid (5-15 minutes): depth 11 (~5-10s/move)
+    # Classical (≥ 15 minutes): depth 11 (~8-15s/move)
     time_control = game_time_controls.get(game_id, (600, 5))  # Default to 10+5
     initial_time, increment = time_control
 
     if initial_time >= 300:  # 5+ minutes = Rapid/Classical
-        target_depth = 10
+        target_depth = 11
         if initial_time >= 900:
             print(f"♟️  Classical mode: Using depth {target_depth}")
         else:
             print(f"⚡ Rapid mode: Using depth {target_depth}")
     else:  # Under 5 minutes = Blitz
-        target_depth = 9
+        target_depth = 10
         print(f"🧠 Blitz mode: Using depth {target_depth}")
 
     # Calculate the move using our engine
